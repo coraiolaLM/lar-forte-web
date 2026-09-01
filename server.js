@@ -45,8 +45,13 @@ const limitador = rateLimit({
     message: { erro: 'Muitas solicitações. Tente novamente mais tarde.' }
 });
 
+console.log('🚀 Iniciando cliente do WhatsApp...');
+
 const client = new Client({
-    authStrategy: new LocalAuth({ clientId: 'lar-forte' }),
+    authStrategy: new LocalAuth({
+        clientId: 'lar-forte'
+    }),
+
     puppeteer: {
         headless: true,
         args: [
