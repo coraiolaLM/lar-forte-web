@@ -2,10 +2,15 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import wwebjs from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 
 const { Client, LocalAuth, MessageMedia } = wwebjs;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -407,17 +412,47 @@ app.post('/api/atendimento', limitador, async (req, res) => {
 
 app.get('/api/status', async (req, res) => {
     let state = 'UNKNOWN';
+
     try {
-        state = await comTimeout(client.getState(), 5000, 'getState');
+        state = await comTimeout(
+            client.getState(),
+            5000,
+            'getState'
+        );
     } catch {
         state = 'OFFLINE';
     }
 
-    res.json({ servidor: 'online', whatsapp: whatsappPronto, estadoWhatsapp: state, data: new Date().toISOString() });
+    res.json({
+        servidor: 'online',
+        whatsapp: whatsappPronto,
+        estadoWhatsapp: state,
+        data: new Date().toISOString()
+    });
 });
+
+/* ============================================
+   FRONTEND REACT / VITE
+============================================ */
+
+const distPath = path.join(__dirname, 'dist');
+
+app.use(express.static(distPath));
+
+app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+});
+
+/* ============================================
+   INICIALIZAÇÃO DO WHATSAPP
+============================================ */
 
 client.initialize();
 
+/* ============================================
+   INICIALIZAÇÃO DO SERVIDOR
+============================================ */
+
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor Express rodando na porta ${PORT}...`);
+    console.log(`🚀 Servidor Lar Forte rodando na porta ${PORT}`);
 });
