@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import wwebjs from 'whatsapp-web.js';
+import puppeteer from 'puppeteer';
 import qrcode from 'qrcode-terminal';
 
 const { Client, LocalAuth, MessageMedia } = wwebjs;
