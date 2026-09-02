@@ -87,15 +87,18 @@ const limitador = rateLimit({
 // WHATSAPP
 // ============================================
 
+import puppeteer from 'puppeteer';
+
 console.log('🚀 Iniciando cliente do WhatsApp...');
-const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH;
 
-if (!chromePath) {
-    console.error('❌ PUPPETEER_EXECUTABLE_PATH não foi configurado.');
+let chromePath;
+
+try {
+    chromePath = puppeteer.executablePath();
+    console.log('🌐 Chrome encontrado em:', chromePath);
+} catch (error) {
+    console.error('❌ Não foi possível localizar o Chrome:', error.message);
 }
-
-console.log('🌐 Chrome configurado em:', chromePath);
-
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: 'lar-forte'
@@ -103,7 +106,6 @@ const client = new Client({
 
     puppeteer: {
         headless: true,
-
         executablePath: chromePath,
 
         args: [
