@@ -10,43 +10,28 @@ import qrcode from 'qrcode-terminal';
 
 const { Client, LocalAuth, MessageMedia } = wwebjs;
 
-// ============================================
-// CONFIGURAÇÃO INICIAL
-// ============================================
+// ============================================================
+// CONFIGURAÇÃO
+// ============================================================
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-
 const PORT = process.env.PORT || 3000;
 
-// ============================================
-// MEMÓRIA
-// ============================================
-
-// Limita a memória usada pelo heap do Node.
-// Deixamos memória disponível para o Chrome.
-if (!process.env.NODE_OPTIONS) {
-    process.env.NODE_OPTIONS = '--max-old-space-size=192';
-}
-
-// ============================================
-// EXPRESS
-// ============================================
-
 app.use(express.json({
-    limit: '15mb'
+    limit: '50mb'
 }));
 
 app.use(express.urlencoded({
-    limit: '15mb',
+    limit: '50mb',
     extended: true
 }));
 
-// ============================================
+// ============================================================
 // CORS
-// ============================================
+// ============================================================
 
 const allowedOrigins = [
     'http://localhost:5173',
@@ -57,19 +42,12 @@ const allowedOrigins = [
 app.use(cors({
     origin: (origin, callback) => {
 
-        // Permite:
-        // - Render health check
-        // - Postman
-        // - chamadas sem Origin
-        if (!origin) {
+        // Permite Render health check, Postman e chamadas sem Origin
+        if (!origin || allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
 
-        if (allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        }
-
-        console.log(`⚠️ Origem bloqueada pelo CORS: ${origin}`);
+        console.log('⚠️ Origem bloqueada pelo CORS:', origin);
 
         return callback(
             new Error(`Origem não permitida pelo CORS: ${origin}`)
@@ -88,68 +66,83 @@ app.use(cors({
     allowedHeaders: [
         'Content-Type',
         'Authorization'
-    ]
+    ],
+
+    credentials: true
 }));
 
-// ============================================
+// ============================================================
 // RATE LIMIT
-// ============================================
+// ============================================================
 
 const limitador = rateLimit({
-
     windowMs: 15 * 60 * 1000,
-
-    max: 10,
-
+    max: 5,
     standardHeaders: true,
-
     legacyHeaders: false,
 
     message: {
         erro: 'Muitas solicitações. Tente novamente mais tarde.'
     }
-
 });
 
-// ============================================
-// WHATSAPP
-// ============================================
+// ============================================================
+// LOG DE MEMÓRIA
+// ============================================================
 
-let whatsappPronto = false;
-let whatsappInicializando = false;
+function logMemoria() {
 
-// ============================================
-// CAMINHO DO CHROME
-// ============================================
+    const memoria = process.memoryUsage();
 
-console.log('🚀 Servidor iniciando...');
-
-let chromePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-
-if (!chromePath) {
-    chromePath = puppeteer.executablePath();
+    console.log(
+        `🧠 Memória Node | RSS: ${Math.round(memoria.rss / 1024 / 1024)} MB | ` +
+        `Heap: ${Math.round(memoria.heapUsed / 1024 / 1024)} MB`
+    );
 }
+
+setInterval(logMemoria, 60000);
+
+// ============================================================
+// CHROME / PUPPETEER
+// ============================================================
+
+console.log('🚀 Iniciando cliente do WhatsApp...');
+
+const chromePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    puppeteer.executablePath();
 
 console.log('🌐 Chrome configurado em:', chromePath);
 
 if (!fs.existsSync(chromePath)) {
 
-    console.error('❌ ARQUIVO DO CHROME NÃO EXISTE:', chromePath);
+    console.error(
+        '❌ ARQUIVO DO CHROME NÃO EXISTE:',
+        chromePath
+    );
 
 } else {
 
     console.log('✅ Arquivo do Chrome encontrado!');
 }
 
-// ============================================
-// CLIENTE WHATSAPP
-// ============================================
+// ============================================================
+// WHATSAPP
+// ============================================================
+
+let whatsappPronto = false;
+let whatsappInicializando = false;
 
 const client = new Client({
 
     authStrategy: new LocalAuth({
         clientId: 'lar-forte',
-        dataPath: path.join(__dirname, '.wwebjs_auth')
+
+        // Reduz arquivos desnecessários de autenticação
+        dataPath: path.join(
+            __dirname,
+            '.wwebjs_auth'
+        )
     }),
 
     puppeteer: {
@@ -158,81 +151,52 @@ const client = new Client({
 
         executablePath: chromePath,
 
-        // Tentativa de reduzir consumo de memória
         args: [
 
+            // Necessário no Render
             '--no-sandbox',
-
             '--disable-setuid-sandbox',
 
+            // Economia de memória
             '--disable-dev-shm-usage',
-
             '--disable-gpu',
-
             '--disable-software-rasterizer',
-
             '--disable-extensions',
-
             '--disable-default-apps',
-
             '--disable-sync',
 
+            // Processos e serviços extras
             '--disable-background-networking',
-
             '--disable-background-timer-throttling',
-
-            '--disable-backgrounding-occluded-windows',
-
-            '--disable-renderer-backgrounding',
-
             '--disable-breakpad',
-
             '--disable-component-update',
 
-            '--disable-domain-reliability',
-
-            '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter',
-
-            '--disable-hang-monitor',
-
-            '--disable-ipc-flooding-protection',
-
+            // Recursos desnecessários
+            '--disable-notifications',
             '--disable-popup-blocking',
-
-            '--disable-prompt-on-repost',
-
-            '--disable-session-crashed-bubble',
-
-            '--disable-client-side-phishing-detection',
-
-            '--metrics-recording-only',
-
+            '--disable-translate',
             '--mute-audio',
 
+            // Inicialização
             '--no-first-run',
-
-            '--no-default-browser-check',
-
             '--no-zygote',
 
-            '--password-store=basic',
+            // Economia de cache
+            '--disk-cache-size=1',
+            '--media-cache-size=1',
 
-            '--use-mock-keychain',
-
-            '--hide-scrollbars',
-
-            '--force-color-profile=srgb'
+            // Menor uso gráfico
+            '--window-size=800,600'
         ]
     }
-
 });
 
 const ID_GRUPO_FUNCIONARIOS =
     '120363409125356830@g.us';
 
-// ============================================
+// ============================================================
 // FUNÇÕES AUXILIARES
-// ============================================
+// ============================================================
 
 const delay = (ms) =>
     new Promise(resolve => setTimeout(resolve, ms));
@@ -256,7 +220,6 @@ async function comTimeout(
             );
 
         }, tempoMs);
-
     });
 
     try {
@@ -269,9 +232,7 @@ async function comTimeout(
     } finally {
 
         clearTimeout(timeoutId);
-
     }
-
 }
 
 async function verificarWhatsApp() {
@@ -284,7 +245,7 @@ async function verificarWhatsApp() {
 
         const state = await comTimeout(
             client.getState(),
-            5000,
+            8000,
             'client.getState()'
         );
 
@@ -292,15 +253,18 @@ async function verificarWhatsApp() {
 
     } catch (error) {
 
+        console.error(
+            '⚠️ Não foi possível confirmar estado do WhatsApp:',
+            error?.message || error
+        );
+
         return false;
-
     }
-
 }
 
-// ============================================
-// ANÁLISE DO TELEFONE
-// ============================================
+// ============================================================
+// TELEFONE
+// ============================================================
 
 function analisarTelefone(telefone) {
 
@@ -311,23 +275,19 @@ function analisarTelefone(telefone) {
             motivo: 'NUMERO_INVALIDO',
             numero: null
         };
-
     }
 
-    let numero = String(telefone)
-        .replace(/\D/g, '');
+    let numero =
+        String(telefone).replace(/\D/g, '');
 
-    // Remove prefixo internacional 00
     if (numero.startsWith('00')) {
         numero = numero.substring(2);
     }
 
-    // Adiciona Brasil
     if (!numero.startsWith('55')) {
         numero = `55${numero}`;
     }
 
-    // 55 + DDD + 8 ou 9 dígitos
     if (
         numero.length !== 12 &&
         numero.length !== 13
@@ -338,12 +298,10 @@ function analisarTelefone(telefone) {
             motivo: 'NUMERO_INVALIDO',
             numero
         };
-
     }
 
-    const ddd = Number(
-        numero.substring(2, 4)
-    );
+    const ddd =
+        Number(numero.substring(2, 4));
 
     if (
         Number.isNaN(ddd) ||
@@ -356,13 +314,12 @@ function analisarTelefone(telefone) {
             motivo: 'NUMERO_INVALIDO',
             numero
         };
-
     }
 
-    // Celular brasileiro
     if (numero.length === 13) {
 
-        const celular = numero.substring(4);
+        const celular =
+            numero.substring(4);
 
         if (!celular.startsWith('9')) {
 
@@ -371,131 +328,76 @@ function analisarTelefone(telefone) {
                 motivo: 'NUMERO_INVALIDO',
                 numero
             };
-
         }
-
     }
 
     return {
+
         valido: true,
         motivo: 'VALIDO',
         numero,
         idDireto: `${numero}@c.us`
     };
-
 }
 
-// ============================================
+// ============================================================
 // CLASSIFICAÇÃO DE ERROS
-// ============================================
+// ============================================================
 
 function classificarErroWhatsApp(error) {
 
-    const texto = String(
-        error?.message || error || ''
-    ).toLowerCase();
+    const texto =
+        String(error?.message || error || '')
+            .toLowerCase();
 
     if (
         texto.includes('no lid for user') ||
         texto.includes('lid')
     ) {
-
         return 'LID_ERROR';
-
     }
 
     if (
         texto.includes('not registered') ||
         texto.includes('not a whatsapp user')
     ) {
-
         return 'NUMERO_NAO_ENCONTRADO';
-
     }
 
     if (
+        texto.includes('invalid') ||
         texto.includes('invalid wid') ||
         texto.includes('invalid number')
     ) {
-
         return 'NUMERO_INVALIDO';
-
     }
 
     if (
         texto.includes('disconnected') ||
-        texto.includes('not connected')
+        texto.includes('not connected') ||
+        texto.includes('session')
     ) {
-
         return 'WHATSAPP_OFFLINE';
-
     }
 
     return 'ERRO_ENVIO';
-
 }
 
-// ============================================
-// ENVIO PARA GRUPO
-// ============================================
-
-async function enviarMensagemGrupo(mensagem) {
-
-    if (!await verificarWhatsApp()) {
-
-        console.log(
-            '⚠️ WhatsApp offline. Mensagem do grupo não enviada.'
-        );
-
-        return false;
-
-    }
-
-    try {
-
-        await comTimeout(
-
-            client.sendMessage(
-                ID_GRUPO_FUNCIONARIOS,
-                mensagem
-            ),
-
-            15000,
-
-            'envio para grupo'
-
-        );
-
-        return true;
-
-    } catch (erro) {
-
-        console.error(
-            '❌ Erro ao enviar mensagem para grupo:',
-            erro?.message || erro
-        );
-
-        return false;
-
-    }
-
-}
-
-// ============================================
-// CONFIRMAÇÃO PARA CLIENTE
-// ============================================
+// ============================================================
+// ENVIO DE CONFIRMAÇÃO AO CLIENTE
+// ============================================================
 
 async function enviarConfirmacaoCliente(dados) {
 
     console.log('');
-    console.log('=================================');
+    console.log('================================');
     console.log('📨 CONFIRMAÇÃO PARA CLIENTE');
-    console.log('=================================');
+    console.log('================================');
 
-    const analiseTelefone =
+    const analise =
         analisarTelefone(dados.telefone);
 
-    if (!analiseTelefone.valido) {
+    if (!analise.valido) {
 
         console.log(
             '❌ Número inválido:',
@@ -506,210 +408,136 @@ async function enviarConfirmacaoCliente(dados) {
             sucesso: false,
             motivo: 'NUMERO_INVALIDO'
         };
-
     }
 
-    const numero =
-        analiseTelefone.numero;
-
-    const idDireto =
-        analiseTelefone.idDireto;
+    const numero = analise.numero;
 
     if (!await verificarWhatsApp()) {
-
-        console.log(
-            '❌ WhatsApp offline.'
-        );
 
         return {
             sucesso: false,
             motivo: 'WHATSAPP_OFFLINE'
         };
-
     }
 
-    const mensagemCliente =
-        `Olá, *${dados.nome || 'cliente'}*! 👋\n\n` +
+    const mensagem =
+
+        `Olá, *${dados.nome}*! 👋\n\n` +
+
         `Recebemos com sucesso o seu pedido de orçamento ` +
-        `para o serviço de *${dados.servicoEspecifico || 'sua solicitação'}*.\n\n` +
+        `para o serviço de *${dados.servicoEspecifico}*.\n\n` +
+
         `Nossa equipe já foi notificada e entrará em contato ` +
-        `muito em breve.\n\n` +
+        `em breve para alinhar os próximos detalhes.\n\n` +
+
         `Agradecemos por escolher a *Lar Forte*! 🏠🛠️`;
-
-    let contactId = null;
-
-    // ----------------------------------------
-    // TENTATIVA 1
-    // ----------------------------------------
 
     try {
 
-        console.log(
-            `🔎 Procurando número: ${numero}`
-        );
-
-        contactId = await comTimeout(
-
-            client.getNumberId(numero),
-
-            10000,
-
-            'getNumberId'
-
-        );
-
-    } catch (erro) {
-
-        console.log(
-            '⚠️ getNumberId falhou:',
-            erro?.message || erro
-        );
-
-    }
-
-    // ----------------------------------------
-    // TENTATIVA 2
-    // ----------------------------------------
-
-    if (contactId?._serialized) {
-
-        try {
-
-            console.log(
-                '📤 Enviando pelo Contact ID...'
+        // Primeiro tenta localizar o contato
+        const contactId =
+            await comTimeout(
+                client.getNumberId(numero),
+                10000,
+                'getNumberId'
             );
+
+        if (contactId?._serialized) {
 
             await comTimeout(
 
                 client.sendMessage(
                     contactId._serialized,
-                    mensagemCliente
+                    mensagem
                 ),
 
                 15000,
 
                 'sendMessage contactId'
-
             );
 
             console.log(
-                `✅ Mensagem enviada para ${numero}`
+                `✅ Confirmação enviada para ${numero}`
             );
 
             return {
                 sucesso: true,
-                motivo: 'ENVIADO',
                 metodo: 'CONTACT_ID'
             };
-
-        } catch (erro) {
-
-            console.log(
-                '⚠️ Falha no Contact ID:',
-                erro?.message || erro
-            );
-
         }
 
-    }
-
-    // ----------------------------------------
-    // TENTATIVA 3
-    // ----------------------------------------
-
-    try {
+    } catch (error) {
 
         console.log(
-            `📤 Envio direto: ${idDireto}`
+            '⚠️ Falha na busca do contato:',
+            error?.message || error
         );
+    }
+
+    // Fallback pelo número
+    try {
 
         await comTimeout(
 
             client.sendMessage(
-                idDireto,
-                mensagemCliente
+                `${numero}@c.us`,
+                mensagem
             ),
 
             15000,
 
-            'sendMessage número direto'
-
-        );
-
-        console.log(
-            `✅ Mensagem enviada diretamente para ${numero}`
+            'sendMessage numero'
         );
 
         return {
             sucesso: true,
-            motivo: 'ENVIADO',
             metodo: 'NUMERO_DIRETO'
         };
 
-    } catch (erro) {
+    } catch (error) {
 
-        const tipoErro =
-            classificarErroWhatsApp(erro);
+        const tipo =
+            classificarErroWhatsApp(error);
 
         console.error(
-            `❌ Falha no envio [${tipoErro}]:`,
-            erro?.message || erro
+            `❌ Erro no envio [${tipo}]:`,
+            error?.message || error
         );
-
-        // LID
-        if (tipoErro === 'LID_ERROR') {
-
-            await enviarMensagemGrupo(
-
-                `⚠️ *FALHA NO ENVIO AO CLIENTE*\n\n` +
-                `Cliente: *${dados.nome || 'Não informado'}*\n` +
-                `Telefone: ${dados.telefone || 'Não informado'}\n` +
-                `Serviço: ${dados.servicoEspecifico || 'Não informado'}\n\n` +
-                `O número parece válido, mas o WhatsApp ` +
-                `não conseguiu resolver o identificador interno.`
-
-            );
-
-        }
 
         return {
             sucesso: false,
-            motivo: tipoErro
+            motivo: tipo
         };
-
     }
-
 }
 
-// ============================================
+// ============================================================
 // EVENTOS WHATSAPP
-// ============================================
+// ============================================================
 
 client.on('qr', (qr) => {
 
     whatsappPronto = false;
 
     console.log('');
-    console.log('📱 NOVO QR CODE GERADO');
-    console.log('');
+    console.log('================================');
+    console.log('📱 QR CODE GERADO');
+    console.log('================================');
 
     qrcode.generate(qr, {
         small: true
     });
 
     console.log('');
-    console.log(
-        '📱 Escaneie o QR Code com o WhatsApp da empresa!'
-    );
+    console.log('📱 Escaneie o QR Code!');
     console.log('');
 
+    logMemoria();
 });
 
 client.on('authenticated', () => {
 
-    console.log(
-        '🔐 WhatsApp autenticado.'
-    );
+    console.log('🔐 WhatsApp autenticado.');
 
 });
 
@@ -719,9 +547,10 @@ client.on('ready', () => {
     whatsappInicializando = false;
 
     console.log(
-        '✅ Bot do WhatsApp conectado e pronto para enviar mensagens!'
+        '✅ Bot do WhatsApp conectado e pronto!'
     );
 
+    logMemoria();
 });
 
 client.on('auth_failure', (msg) => {
@@ -733,26 +562,44 @@ client.on('auth_failure', (msg) => {
         '❌ Falha na autenticação:',
         msg
     );
-
 });
 
 client.on('disconnected', (reason) => {
 
     whatsappPronto = false;
-    whatsappInicializando = false;
 
     console.error(
         '⚠️ WhatsApp desconectado:',
         reason
     );
-
 });
 
-// ============================================
-// BOT AUTOMÁTICO
-// ============================================
+// ============================================================
+// PROTEÇÃO CONTRA ERROS
+// ============================================================
 
-const controleSaudacao = new Map();
+process.on('uncaughtException', (err) => {
+
+    console.error(
+        '💥 Erro crítico:',
+        err?.stack || err
+    );
+});
+
+process.on('unhandledRejection', (reason) => {
+
+    console.error(
+        '💥 Promise rejeitada:',
+        reason
+    );
+});
+
+// ============================================================
+// BOT AUTOMÁTICO
+// ============================================================
+
+const controleSaudacao =
+    new Map();
 
 const tempoDeInicio =
     Math.floor(Date.now() / 1000);
@@ -761,7 +608,6 @@ client.on('message', async (msg) => {
 
     try {
 
-        // Ignora mensagens antigas
         if (
             msg.timestamp &&
             msg.timestamp < tempoDeInicio
@@ -769,36 +615,29 @@ client.on('message', async (msg) => {
             return;
         }
 
-        // Ignora grupos
-        if (msg.from.includes('@g.us')) {
-            return;
-        }
-
-        // Ignora status
-        if (msg.from === 'status@broadcast') {
-            return;
-        }
-
-        // Ignora mensagens próprias
-        if (msg.fromMe) {
+        if (
+            msg.from.includes('@g.us') ||
+            msg.from === 'status@broadcast' ||
+            msg.fromMe
+        ) {
             return;
         }
 
         const texto =
-            String(msg.body || '')
+            (msg.body || '')
                 .toLowerCase()
                 .trim();
 
         const remetente =
             msg.from;
 
-        // Pessoa escolheu atendimento humano
         if (texto === '1') {
 
             await delay(1500);
 
             await msg.reply(
-                '✅ *Certo!* Um de nossos profissionais já vai falar com você. Aguarde um instante.'
+                '✅ *Certo!* Um de nossos profissionais ' +
+                'já vai falar com você. Por favor, aguarde.'
             );
 
             return;
@@ -814,49 +653,54 @@ client.on('message', async (msg) => {
             2 * 60 * 60 * 1000;
 
         if (
-            ultimaMensagem &&
-            agora - ultimaMensagem < tempoLimite
+            !ultimaMensagem ||
+            agora - ultimaMensagem > tempoLimite
         ) {
-            return;
+
+            await delay(1500);
+
+            const linkSite =
+                'https://larforte.onrender.com/atendimento';
+
+            const saudacao =
+
+                'Olá! Tudo bem? 👋\n\n' +
+
+                'Somos a *Lar Forte*, especialistas em ' +
+                'soluções e manutenção para sua casa.\n\n' +
+
+                'Para solicitar um orçamento, acesse:\n' +
+
+                `👉 ${linkSite}\n\n` +
+
+                'Ou, se preferir falar com nossa equipe agora, ' +
+                '*digite 1*.';
+
+            await msg.reply(saudacao);
+
+            controleSaudacao.set(
+                remetente,
+                agora
+            );
         }
 
-        await delay(1500);
-
-        const linkSite =
-            'https://larforte.onrender.com/atendimento';
-
-        const saudacao =
-            `Olá! Tudo bem? 👋\n\n` +
-            `Somos a *Lar Forte*, especialistas em soluções e manutenção para sua casa.\n\n` +
-            `Para solicitar um orçamento, acesse:\n` +
-            `👉 ${linkSite}\n\n` +
-            `Ou, se preferir falar com nossa equipe agora, *digite 1*.`;
-
-        await msg.reply(saudacao);
-
-        controleSaudacao.set(
-            remetente,
-            agora
-        );
-
-    } catch (erro) {
+    } catch (error) {
 
         console.error(
-            '❌ Erro no processamento do bot:',
-            erro?.message || erro
+            '❌ Erro no bot:',
+            error?.message || error
         );
-
     }
-
 });
 
-// ============================================
+// ============================================================
 // API ATENDIMENTO
-// ============================================
+// ============================================================
 
 app.post(
     '/api/atendimento',
     limitador,
+
     async (req, res) => {
 
         try {
@@ -864,89 +708,97 @@ app.post(
             const dados =
                 req.body || {};
 
-            // =================================
-            // SALVAR CSV
-            // =================================
-
-            const caminhoBanco =
-                path.join(
-                    __dirname,
-                    'banco_de_dados.csv'
-                );
-
-            const cabecalho =
-                !fs.existsSync(caminhoBanco)
-                    ? 'Data,Nome,Telefone,Endereço,Categoria,Serviço,Preço,Observações\n'
-                    : '';
-
-            const escapeCsv = (valor) =>
-                String(valor || '')
-                    .replace(/"/g, '""');
-
-            const linhaCsv =
-                `"${new Date().toLocaleString('pt-BR')}",` +
-                `"${escapeCsv(dados.nome)}",` +
-                `"${escapeCsv(dados.telefone)}",` +
-                `"${escapeCsv(dados.endereco)}",` +
-                `"${escapeCsv(dados.categoria)}",` +
-                `"${escapeCsv(dados.servicoEspecifico)}",` +
-                `"${escapeCsv(dados.orcamentoMedio)}",` +
-                `"${escapeCsv(dados.observacoes)}"\n`;
-
-            fs.appendFileSync(
-                caminhoBanco,
-                cabecalho + linhaCsv,
-                'utf8'
-            );
-
-            // =================================
-            // RESPOSTA IMEDIATA AO FRONTEND
-            // =================================
-
+            // Responde imediatamente ao frontend
             res.status(200).json({
-
                 sucesso: true,
-
-                mensagem:
-                    'Pedido registrado com sucesso!'
-
+                mensagem: 'Pedido registrado com sucesso!'
             });
 
-            // =================================
-            // PROCESSAMENTO EM BACKGROUND
-            // =================================
-
+            // Tudo abaixo acontece em segundo plano
             setImmediate(async () => {
 
                 try {
 
+                    // CSV
+                    const caminhoBanco =
+                        path.join(
+                            __dirname,
+                            'banco_de_dados.csv'
+                        );
+
+                    const cabecalho =
+                        !fs.existsSync(caminhoBanco)
+                            ? 'Data,Nome,Telefone,Endereço,Categoria,Serviço,Preço,Observações\n'
+                            : '';
+
+                    const limparCsv = (valor) =>
+                        String(valor || '')
+                            .replace(/"/g, '""');
+
+                    const linhaCsv =
+
+                        `"${new Date().toLocaleString('pt-BR')}",` +
+                        `"${limparCsv(dados.nome)}",` +
+                        `"${limparCsv(dados.telefone)}",` +
+                        `"${limparCsv(dados.endereco)}",` +
+                        `"${limparCsv(dados.categoria)}",` +
+                        `"${limparCsv(dados.servicoEspecifico)}",` +
+                        `"${limparCsv(dados.orcamentoMedio)}",` +
+                        `"${limparCsv(dados.observacoes)}"\n`;
+
+                    fs.appendFileSync(
+                        caminhoBanco,
+                        cabecalho + linhaCsv,
+                        'utf8'
+                    );
+
+                    // Se WhatsApp estiver offline,
+                    // não tenta enviar mensagens
+                    if (!await verificarWhatsApp()) {
+
+                        console.log(
+                            '⚠️ Pedido salvo, mas WhatsApp offline.'
+                        );
+
+                        return;
+                    }
+
                     const relatorio =
-                        `🚨 *NOVO CHAMADO VIA SITE* 🚨\n\n` +
+
+                        '🚨 *NOVO CHAMADO VIA SITE* 🚨\n\n' +
+
                         `👤 *Cliente:* ${dados.nome || 'Não informado'}\n` +
                         `📱 *Contato:* ${dados.telefone || 'Não informado'}\n` +
                         `📍 *Endereço:* ${dados.endereco || 'Não informado'}\n\n` +
-                        `🛠️ *Detalhes do Pedido*\n` +
+
+                        '🛠️ *Detalhes do Pedido*\n' +
+
                         `*Categoria:* ${dados.categoria || 'Não informado'}\n` +
                         `*Serviço:* ${dados.servicoEspecifico || 'Não informado'}\n` +
                         `*Previsão:* ${dados.orcamentoMedio || 'Não informado'}\n\n` +
+
                         `📌 *Observações:* ${dados.observacoes || 'Nenhuma'}`;
 
-                    // Grupo
-                    await enviarMensagemGrupo(
-                        relatorio
+                    await comTimeout(
+
+                        client.sendMessage(
+                            ID_GRUPO_FUNCIONARIOS,
+                            relatorio
+                        ),
+
+                        15000,
+
+                        'envio grupo'
                     );
 
-                    // Foto
+                    // FOTO
                     if (
                         dados.enviouMidia === 'Sim' &&
-                        dados.arquivoPreview &&
-                        await verificarWhatsApp()
+                        dados.arquivoPreview
                     ) {
 
                         const base64Data =
-                            String(
-                                dados.arquivoPreview
-                            )
+                            String(dados.arquivoPreview)
                                 .split(';base64,')
                                 .pop();
 
@@ -954,13 +806,12 @@ app.post(
                             new MessageMedia(
 
                                 dados.mimetype ||
-                                    'image/jpeg',
+                                'image/jpeg',
 
                                 base64Data,
 
                                 dados.filename ||
-                                    'arquivo.jpg'
-
+                                'arquivo.jpg'
                             );
 
                         await comTimeout(
@@ -970,167 +821,114 @@ app.post(
                                 media,
                                 {
                                     caption:
-                                        `📸 Foto enviada pelo cliente *${dados.nome || ''}*`
+                                        `📸 Foto enviada por *${dados.nome}*`
                                 }
                             ),
 
                             30000,
 
-                            'envio de mídia'
-
+                            'envio mídia'
                         );
-
                     }
 
-                    // Cliente
-                    await enviarConfirmacaoCliente(
-                        dados
-                    );
+                    // Confirmação ao cliente
+                    await enviarConfirmacaoCliente(dados);
 
-                } catch (erro) {
+                } catch (error) {
 
                     console.error(
                         '❌ Erro no processamento em background:',
-                        erro?.message || erro
+                        error?.message || error
                     );
-
                 }
-
             });
 
         } catch (error) {
 
             console.error(
-                '💥 ERRO NA ROTA /api/atendimento:',
-                error?.stack ||
-                error?.message ||
-                error
+                '💥 Erro na rota atendimento:',
+                error?.message || error
             );
 
             if (!res.headersSent) {
 
                 res.status(500).json({
-
-                    sucesso: false,
-
                     erro:
                         'Falha ao processar o pedido.'
-
                 });
-
             }
-
         }
-
     }
 );
 
-// ============================================
+// ============================================================
 // STATUS
-// ============================================
+// ============================================================
 
-app.get(
-    '/api/status',
-    async (req, res) => {
+app.get('/api/status', async (req, res) => {
 
-        let state = 'OFFLINE';
+    let state = 'OFFLINE';
 
-        if (whatsappPronto) {
+    if (whatsappPronto) {
 
-            try {
+        try {
 
-                state = await comTimeout(
-
+            state =
+                await comTimeout(
                     client.getState(),
-
-                    3000,
-
+                    5000,
                     'getState'
-
                 );
 
-            } catch {
+        } catch {
 
-                state = 'OFFLINE';
-
-            }
-
+            state = 'OFFLINE';
         }
-
-        res.json({
-
-            servidor: 'online',
-
-            whatsapp: whatsappPronto,
-
-            inicializando:
-                whatsappInicializando,
-
-            estadoWhatsapp:
-                state,
-
-            memoria: {
-
-                rssMB:
-                    Math.round(
-                        process.memoryUsage().rss /
-                        1024 /
-                        1024
-                    ),
-
-                heapUsedMB:
-                    Math.round(
-                        process.memoryUsage().heapUsed /
-                        1024 /
-                        1024
-                    )
-
-            },
-
-            data:
-                new Date().toISOString()
-
-        });
-
     }
-);
 
-// ============================================
-// HEALTH CHECK
-// ============================================
+    const memoria =
+        process.memoryUsage();
 
-app.get('/health', (req, res) => {
+    res.json({
 
-    res.status(200).json({
+        servidor: 'online',
 
-        status: 'ok',
+        whatsapp: whatsappPronto,
 
-        whatsapp:
-            whatsappPronto
+        estadoWhatsapp: state,
 
+        memoria: {
+
+            rssMB:
+                Math.round(
+                    memoria.rss / 1024 / 1024
+                ),
+
+            heapMB:
+                Math.round(
+                    memoria.heapUsed / 1024 / 1024
+                )
+        },
+
+        data:
+            new Date().toISOString()
     });
-
 });
 
-// ============================================
-// FRONTEND REACT
-// ============================================
+// ============================================================
+// FRONTEND VITE
+// ============================================================
 
 const distPath =
-    path.join(
-        __dirname,
-        'dist'
-    );
+    path.join(__dirname, 'dist');
 
 app.use(
-    express.static(
-        distPath
-    )
+    express.static(distPath)
 );
 
-// React Router
+// Não interfere nas rotas da API
 app.get(
-    /^(?!\/api\/|\/health).*/,
+    /^(?!\/api\/).*/,
     (req, res) => {
 
         res.sendFile(
@@ -1139,62 +937,48 @@ app.get(
                 'index.html'
             )
         );
-
     }
 );
 
-// ============================================
-// PROTEÇÃO CONTRA ERROS
-// ============================================
+// ============================================================
+// INICIALIZAÇÃO DO SERVIDOR
+// ============================================================
 
-process.on(
-    'uncaughtException',
-    (err) => {
+app.listen(
+    PORT,
+    '0.0.0.0',
+    () => {
 
-        console.error(
-            '⚠️ Erro crítico:',
-            err?.stack ||
-            err?.message ||
-            err
+        console.log(
+            `🚀 Servidor Lar Forte rodando na porta ${PORT}`
         );
 
+        logMemoria();
     }
 );
 
-process.on(
-    'unhandledRejection',
-    (reason) => {
-
-        console.error(
-            '⚠️ Promessa rejeitada:',
-            reason
-        );
-
-    }
-);
-
-// ============================================
-// INICIALIZAÇÃO WHATSAPP
-// ============================================
+// ============================================================
+// INICIALIZAÇÃO DO WHATSAPP
+// ============================================================
 
 async function iniciarWhatsApp() {
 
-    if (
-        whatsappInicializando ||
-        whatsappPronto
-    ) {
+    if (whatsappInicializando) {
+
+        console.log(
+            '⚠️ WhatsApp já está inicializando.'
+        );
 
         return;
-
     }
 
     whatsappInicializando = true;
 
-    console.log(
-        '🚀 Iniciando cliente do WhatsApp...'
-    );
-
     try {
+
+        console.log(
+            '⏳ Inicializando WhatsApp...'
+        );
 
         await client.initialize();
 
@@ -1206,31 +990,7 @@ async function iniciarWhatsApp() {
             '❌ Erro ao inicializar WhatsApp:',
             erro?.message || erro
         );
-
     }
-
 }
 
-// ============================================
-// INICIAR SERVIDOR PRIMEIRO
-// ============================================
-
-app.listen(
-    PORT,
-    '0.0.0.0',
-    () => {
-
-        console.log(
-            `🚀 Servidor Lar Forte rodando na porta ${PORT}`
-        );
-
-        // Espera um pouco antes de abrir o Chrome.
-        // Isso permite ao Render detectar a porta primeiro.
-        setTimeout(() => {
-
-            iniciarWhatsApp();
-
-        }, 3000);
-
-    }
-);
+iniciarWhatsApp();
