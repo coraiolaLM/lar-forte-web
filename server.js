@@ -84,21 +84,16 @@ const limitador = rateLimit({
     }
 });
 
-// ============================================
-// WHATSAPP
-// ============================================
-
-import puppeteer from 'puppeteer';
-
 console.log('🚀 Iniciando cliente do WhatsApp...');
 
-let chromePath;
+const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
 
-try {
-    chromePath = puppeteer.executablePath();
-    console.log('🌐 Chrome encontrado em:', chromePath);
-} catch (error) {
-    console.error('❌ Não foi possível localizar o Chrome:', error.message);
+console.log('🌐 Chrome configurado em:', chromePath);
+
+if (!fs.existsSync(chromePath)) {
+    console.error('❌ ARQUIVO DO CHROME NÃO EXISTE:', chromePath);
+} else {
+    console.log('✅ Arquivo do Chrome encontrado!');
 }
 const client = new Client({
     authStrategy: new LocalAuth({
