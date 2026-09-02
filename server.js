@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import wwebjs from 'whatsapp-web.js';
 import puppeteer from 'puppeteer';
-import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
 
 const { Client, LocalAuth, MessageMedia } = wwebjs;
 
@@ -21,7 +21,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // =====================================================
-// MIDDLEWARE
+// CONFIGURAÇÃO EXPRESS
 // =====================================================
 
 app.use(express.json({
@@ -46,15 +46,20 @@ const allowedOrigins = [
 app.use(cors({
     origin: (origin, callback) => {
 
-        // Permite Render, health checks, Postman etc.
+        // Permite Render health checks, Postman
+        // e chamadas sem header Origin
         if (!origin || allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
 
-        console.log('⚠️ Origem bloqueada pelo CORS:', origin);
+        console.log(
+            `⚠️ Origem bloqueada pelo CORS: ${origin}`
+        );
 
         return callback(
-            new Error(`Origem não permitida pelo CORS: ${origin}`)
+            new Error(
+                `Origem não permitida pelo CORS: ${origin}`
+            )
         );
     },
 
@@ -80,55 +85,74 @@ app.use(cors({
 // =====================================================
 
 const limitador = rateLimit({
+
     windowMs: 15 * 60 * 1000,
+
     max: 20,
 
     standardHeaders: true,
+
     legacyHeaders: false,
 
     message: {
         erro: 'Muitas solicitações. Tente novamente mais tarde.'
     }
+
 });
 
 // =====================================================
-// WHATSAPP - CONFIGURAÇÃO LEVE
+// VARIÁVEIS DO QR CODE
+// =====================================================
+
+// QR original fornecido pelo WhatsApp
+let qrAtual = null;
+
+// Imagem PNG do QR
+let qrImagem = null;
+
+// Momento da geração
+let qrGeradoEm = null;
+
+// Controle de estado
+let whatsappPronto = false;
+let whatsappInicializando = false;
+
+// =====================================================
+// CHROME / PUPPETEER
 // =====================================================
 
 console.log('');
 console.log('🚀 Iniciando cliente do WhatsApp...');
 
-// Caminho definido no Render
 const chromePath =
     process.env.PUPPETEER_EXECUTABLE_PATH ||
     puppeteer.executablePath();
 
-console.log('🌐 Chrome configurado em:', chromePath);
+console.log(
+    '🌐 Chrome configurado em:',
+    chromePath
+);
 
-// Verifica se Chrome existe
 if (!fs.existsSync(chromePath)) {
 
     console.error('');
-    console.error('❌ ARQUIVO DO CHROME NÃO EXISTE!');
-    console.error('📍 Caminho:', chromePath);
+    console.error(
+        '❌ ARQUIVO DO CHROME NÃO EXISTE!'
+    );
+
+    console.error(
+        '📍 Caminho:',
+        chromePath
+    );
+
     console.error('');
 
 } else {
 
-    console.log('✅ Arquivo do Chrome encontrado!');
+    console.log(
+        '✅ Arquivo do Chrome encontrado!'
+    );
 }
-
-// =====================================================
-// CONTROLE DE ESTADO
-// =====================================================
-
-let whatsappPronto = false;
-let whatsappInicializando = false;
-
-// Controla o QR
-let qrJaExibido = false;
-let qrAtual = null;
-let quantidadeQr = 0;
 
 // =====================================================
 // CLIENTE WHATSAPP
@@ -137,13 +161,14 @@ let quantidadeQr = 0;
 const client = new Client({
 
     authStrategy: new LocalAuth({
+
         clientId: 'lar-forte',
 
-        // Evita caminhos desnecessários
         dataPath: path.join(
             __dirname,
             '.wwebjs_auth'
         )
+
     }),
 
     puppeteer: {
@@ -154,45 +179,42 @@ const client = new Client({
 
         args: [
 
-            // Essenciais para Render
+            // Necessário no Render
             '--no-sandbox',
             '--disable-setuid-sandbox',
 
-            // Memória compartilhada
+            // Evita problemas de memória compartilhada
             '--disable-dev-shm-usage',
 
-            // GPU
+            // Não usamos GPU
             '--disable-gpu',
 
             // Inicialização
             '--no-first-run',
             '--no-zygote',
 
-            // Reduz processos extras
+            // Redução de processos extras
             '--disable-extensions',
-
-            // Evita componentes extras
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-
-            '--disable-breakpad',
-            '--disable-component-update',
-
             '--disable-default-apps',
-            '--disable-domain-reliability',
-
-            '--disable-features=Translate,BackForwardCache,MediaRouter,OptimizationHints',
-
             '--disable-sync',
 
-            // Chrome mais leve
-            '--metrics-recording-only',
+            // Reduz atividades em segundo plano
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-component-update',
+            '--disable-domain-reliability',
+
+            // Recursos não utilizados
+            '--disable-breakpad',
+            '--disable-notifications',
+            '--disable-popup-blocking',
 
             '--mute-audio',
 
-            // Evita uso de notificações
-            '--disable-notifications'
+            '--metrics-recording-only',
+
+            '--disable-features=Translate,MediaRouter,OptimizationHints'
+
         ]
 
     }
@@ -213,6 +235,7 @@ const ID_GRUPO_FUNCIONARIOS =
 const delay = (ms) =>
     new Promise(resolve => setTimeout(resolve, ms));
 
+
 async function comTimeout(
     promise,
     tempoMs,
@@ -221,19 +244,20 @@ async function comTimeout(
 
     let timeoutId;
 
-    const timeoutPromise = new Promise((_, reject) => {
+    const timeoutPromise =
+        new Promise((_, reject) => {
 
-        timeoutId = setTimeout(() => {
+            timeoutId = setTimeout(() => {
 
-            reject(
-                new Error(
-                    `Tempo limite excedido em ${nomeOperacao} (${tempoMs}ms)`
-                )
-            );
+                reject(
+                    new Error(
+                        `Tempo limite excedido em ${nomeOperacao} (${tempoMs}ms)`
+                    )
+                );
 
-        }, tempoMs);
+            }, tempoMs);
 
-    });
+        });
 
     try {
 
@@ -250,8 +274,9 @@ async function comTimeout(
 
 }
 
+
 // =====================================================
-// STATUS DO WHATSAPP
+// VERIFICAR WHATSAPP
 // =====================================================
 
 async function verificarWhatsApp() {
@@ -262,11 +287,16 @@ async function verificarWhatsApp() {
 
     try {
 
-        const state = await comTimeout(
-            client.getState(),
-            5000,
-            'client.getState()'
-        );
+        const state =
+            await comTimeout(
+
+                client.getState(),
+
+                5000,
+
+                'client.getState'
+
+            );
 
         return state === 'CONNECTED';
 
@@ -278,19 +308,28 @@ async function verificarWhatsApp() {
 
 }
 
+
 // =====================================================
 // MEMÓRIA
 // =====================================================
 
+// Mostra memória somente a cada 5 minutos
+// para não poluir o log
+
 setInterval(() => {
 
-    const memoria = process.memoryUsage();
+    const memoria =
+        process.memoryUsage();
 
     const rss =
-        Math.round(memoria.rss / 1024 / 1024);
+        Math.round(
+            memoria.rss / 1024 / 1024
+        );
 
     const heap =
-        Math.round(memoria.heapUsed / 1024 / 1024);
+        Math.round(
+            memoria.heapUsed / 1024 / 1024
+        );
 
     console.log(
         `🧠 Memória Node | RSS: ${rss} MB | Heap: ${heap} MB`
@@ -298,8 +337,9 @@ setInterval(() => {
 
 }, 5 * 60 * 1000);
 
+
 // =====================================================
-// ANÁLISE DO TELEFONE
+// ANALISAR TELEFONE
 // =====================================================
 
 function analisarTelefone(telefone) {
@@ -315,24 +355,27 @@ function analisarTelefone(telefone) {
     }
 
     let numero =
-        String(telefone).replace(/\D/g, '');
+        String(telefone)
+            .replace(/\D/g, '');
 
-    // Remove prefixo 00
+    // Remove prefixo internacional 00
     if (numero.startsWith('00')) {
 
-        numero = numero.substring(2);
+        numero =
+            numero.substring(2);
 
     }
 
-    // Adiciona Brasil
+    // Adiciona código do Brasil
     if (!numero.startsWith('55')) {
 
-        numero = `55${numero}`;
+        numero =
+            `55${numero}`;
 
     }
 
     // Brasil:
-    // 55 + DDD + 8/9 dígitos
+    // 55 + DDD + 8 ou 9 dígitos
     if (
         numero.length !== 12 &&
         numero.length !== 13
@@ -347,7 +390,9 @@ function analisarTelefone(telefone) {
     }
 
     const ddd =
-        Number(numero.substring(2, 4));
+        Number(
+            numero.substring(2, 4)
+        );
 
     if (
         Number.isNaN(ddd) ||
@@ -363,7 +408,7 @@ function analisarTelefone(telefone) {
 
     }
 
-    // Celular de 9 dígitos
+    // Celular com 9 dígitos
     if (numero.length === 13) {
 
         const celular =
@@ -384,6 +429,7 @@ function analisarTelefone(telefone) {
     return {
 
         valido: true,
+
         motivo: 'VALIDO',
 
         numero,
@@ -394,6 +440,7 @@ function analisarTelefone(telefone) {
     };
 
 }
+
 
 // =====================================================
 // CLASSIFICAR ERROS
@@ -419,7 +466,8 @@ function classificarErroWhatsApp(error) {
 
     if (
         texto.includes('not registered') ||
-        texto.includes('not a whatsapp user')
+        texto.includes('not a whatsapp user') ||
+        texto.includes('not registered in whatsapp')
     ) {
 
         return 'NUMERO_NAO_ENCONTRADO';
@@ -427,7 +475,6 @@ function classificarErroWhatsApp(error) {
     }
 
     if (
-        texto.includes('invalid') ||
         texto.includes('invalid wid') ||
         texto.includes('invalid number')
     ) {
@@ -438,8 +485,7 @@ function classificarErroWhatsApp(error) {
 
     if (
         texto.includes('disconnected') ||
-        texto.includes('not connected') ||
-        texto.includes('session')
+        texto.includes('not connected')
     ) {
 
         return 'WHATSAPP_OFFLINE';
@@ -450,25 +496,35 @@ function classificarErroWhatsApp(error) {
 
 }
 
+
 // =====================================================
-// ENVIO PARA CLIENTE
+// ENVIAR CONFIRMAÇÃO AO CLIENTE
 // =====================================================
 
 async function enviarConfirmacaoCliente(dados) {
 
     console.log('');
-    console.log('========================================');
-    console.log('📨 CONFIRMAÇÃO PARA O CLIENTE');
-    console.log('========================================');
+    console.log(
+        '========================================'
+    );
+
+    console.log(
+        '📨 ENVIO DE CONFIRMAÇÃO AO CLIENTE'
+    );
+
+    console.log(
+        '========================================'
+    );
 
     const analise =
-        analisarTelefone(dados.telefone);
+        analisarTelefone(
+            dados.telefone
+        );
 
     if (!analise.valido) {
 
         console.error(
-            '❌ Número inválido:',
-            dados.telefone
+            `❌ Número inválido: ${dados.telefone}`
         );
 
         return {
@@ -478,10 +534,15 @@ async function enviarConfirmacaoCliente(dados) {
 
     }
 
-    const {
-        numero,
-        idDireto
-    } = analise;
+    const numero =
+        analise.numero;
+
+    const idDireto =
+        analise.idDireto;
+
+    console.log(
+        `📱 Número normalizado: ${numero}`
+    );
 
     const whatsappDisponivel =
         await verificarWhatsApp();
@@ -489,7 +550,7 @@ async function enviarConfirmacaoCliente(dados) {
     if (!whatsappDisponivel) {
 
         console.error(
-            '❌ WhatsApp offline. Confirmação não enviada.'
+            '❌ WhatsApp está offline.'
         );
 
         return {
@@ -504,28 +565,32 @@ async function enviarConfirmacaoCliente(dados) {
         `Olá, *${dados.nome || 'cliente'}*! 👋\n\n` +
 
         `Recebemos com sucesso o seu pedido de orçamento ` +
+
         `para o serviço de *${dados.servicoEspecifico || 'sua solicitação'}*.\n\n` +
 
-        `Nossa equipe já foi notificada e entrará em contato ` +
-        `em breve para alinhar os próximos detalhes.\n\n` +
+        `Nossa equipe já foi notificada e entraremos em contato ` +
+
+        `muito em breve para alinhar os próximos detalhes.\n\n` +
 
         `Agradecemos por escolher a *Lar Forte*! 🏠🛠️`;
 
-    // -----------------------------------------------
-    // TENTATIVA 1 - RESOLVER NÚMERO
-    // -----------------------------------------------
+    // =================================================
+    // TENTATIVA 1
+    // BUSCAR O ID DO CONTATO
+    // =================================================
 
     try {
 
         console.log(
-            '🔎 Procurando contato:',
-            numero
+            '🔎 Procurando contato pelo número...'
         );
 
         const contactId =
             await comTimeout(
 
-                client.getNumberId(numero),
+                client.getNumberId(
+                    numero
+                ),
 
                 10000,
 
@@ -536,15 +601,22 @@ async function enviarConfirmacaoCliente(dados) {
         if (contactId?._serialized) {
 
             console.log(
-                '📤 Enviando para:',
+                '✅ Contato encontrado.'
+            );
+
+            console.log(
+                '🆔 ID:',
                 contactId._serialized
             );
 
             await comTimeout(
 
                 client.sendMessage(
+
                     contactId._serialized,
+
                     mensagemCliente
+
                 ),
 
                 15000,
@@ -554,13 +626,17 @@ async function enviarConfirmacaoCliente(dados) {
             );
 
             console.log(
-                '✅ Confirmação enviada!'
+                `✅ Mensagem enviada para ${dados.nome}`
             );
 
             return {
+
                 sucesso: true,
+
                 motivo: 'ENVIADO',
+
                 metodo: 'CONTACT_ID'
+
             };
 
         }
@@ -574,15 +650,15 @@ async function enviarConfirmacaoCliente(dados) {
 
     }
 
-    // -----------------------------------------------
-    // TENTATIVA 2 - NÚMERO DIRETO
-    // -----------------------------------------------
+    // =================================================
+    // TENTATIVA 2
+    // ENVIAR DIRETAMENTE PARA O NÚMERO
+    // =================================================
 
     try {
 
         console.log(
-            '📤 Tentando envio direto:',
-            idDireto
+            `📤 Tentando envio direto para ${idDireto}`
         );
 
         await comTimeout(
@@ -599,95 +675,190 @@ async function enviarConfirmacaoCliente(dados) {
         );
 
         console.log(
-            '✅ Mensagem enviada diretamente!'
+            `✅ Mensagem enviada diretamente para ${dados.nome}`
         );
 
         return {
+
             sucesso: true,
+
             motivo: 'ENVIADO',
+
             metodo: 'NUMERO_DIRETO'
+
         };
 
     } catch (erro) {
 
         const tipoErro =
-            classificarErroWhatsApp(erro);
+            classificarErroWhatsApp(
+                erro
+            );
 
         console.error(
             `❌ Erro no envio [${tipoErro}]:`,
             erro?.message || erro
         );
 
+        // Aviso especial para LID
+        if (tipoErro === 'LID_ERROR') {
+
+            try {
+
+                if (
+                    await verificarWhatsApp()
+                ) {
+
+                    await client.sendMessage(
+
+                        ID_GRUPO_FUNCIONARIOS,
+
+                        `⚠️ *FALHA NO ENVIO DO PV*\n\n` +
+
+                        `Cliente: *${dados.nome || 'Não informado'}*\n` +
+
+                        `📱 Número: ${dados.telefone || 'Não informado'}\n` +
+
+                        `🛠️ Serviço: ${dados.servicoEspecifico || 'Não informado'}\n\n` +
+
+                        `O pedido foi recebido, mas o WhatsApp não conseguiu resolver o LID do contato.`
+
+                    );
+
+                }
+
+            } catch (erroAviso) {
+
+                console.error(
+                    '⚠️ Não foi possível avisar o grupo:',
+                    erroAviso?.message || erroAviso
+                );
+
+            }
+
+        }
+
         return {
+
             sucesso: false,
+
             motivo: tipoErro
+
         };
 
     }
 
 }
 
+
 // =====================================================
-// EVENTOS DO WHATSAPP
+// EVENTO QR CODE
 // =====================================================
 
-client.on('qr', (qr) => {
+client.on('qr', async (qr) => {
 
-    whatsappPronto = false;
+    try {
 
-    qrAtual = qr;
-    quantidadeQr++;
+        whatsappPronto = false;
 
-    // =================================================
-    // EXIBE APENAS O PRIMEIRO QR NO LOG
-    // =================================================
+        // Guarda texto do QR
+        qrAtual = qr;
 
-    if (!qrJaExibido) {
-
-        qrJaExibido = true;
-
-        console.log('');
-        console.log('========================================');
-        console.log('📱 QR CODE DO WHATSAPP');
-        console.log('========================================');
-
-        qrcode.generate(qr, {
-            small: true
-        });
+        // Guarda data
+        qrGeradoEm =
+            new Date().toISOString();
 
         console.log('');
         console.log(
-            '📱 Escaneie este QR Code com o WhatsApp da empresa.'
+            '========================================'
         );
 
         console.log(
-            '⚠️ Após escanear, aguarde a mensagem de conexão.'
+            '📱 NOVO QR CODE DO WHATSAPP GERADO'
         );
 
-        console.log('========================================');
-        console.log('');
+        console.log(
+            '========================================'
+        );
 
-    } else {
+        // Gera PNG verdadeiro
+        qrImagem =
+            await QRCode.toBuffer(
+                qr,
+                {
+                    type: 'png',
+
+                    width: 500,
+
+                    margin: 2,
+
+                    errorCorrectionLevel: 'M'
+                }
+            );
 
         console.log(
-            `🔄 WhatsApp gerou um novo QR (${quantidadeQr}), mas o QR não será repetido no log.`
+            '✅ QR Code convertido para imagem PNG.'
+        );
+
+        console.log('');
+        console.log(
+            '🌐 Abra no navegador:'
+        );
+
+        console.log(
+            '/qrcode'
+        );
+
+        console.log('');
+        console.log(
+            '📱 Escaneie o QR usando o WhatsApp da empresa.'
+        );
+
+        console.log(
+            '========================================'
+        );
+
+        console.log('');
+
+    } catch (erro) {
+
+        console.error(
+            '❌ Erro ao gerar imagem do QR Code:',
+            erro?.message || erro
         );
 
     }
 
 });
 
+
 // =====================================================
-// READY
+// WHATSAPP AUTENTICADO
+// =====================================================
+
+client.on('authenticated', () => {
+
+    console.log(
+        '🔐 WhatsApp autenticado com sucesso.'
+    );
+
+});
+
+
+// =====================================================
+// WHATSAPP PRONTO
 // =====================================================
 
 client.on('ready', () => {
 
     whatsappPronto = true;
+
     whatsappInicializando = false;
 
-    // Limpa QR da memória
+    // QR não é mais necessário
     qrAtual = null;
+    qrImagem = null;
+    qrGeradoEm = null;
 
     console.log('');
     console.log(
@@ -706,41 +877,33 @@ client.on('ready', () => {
 
 });
 
-// =====================================================
-// AUTHENTICATED
-// =====================================================
-
-client.on('authenticated', () => {
-
-    console.log(
-        '🔐 WhatsApp autenticado com sucesso.'
-    );
-
-});
 
 // =====================================================
-// AUTH FAILURE
+// FALHA DE AUTENTICAÇÃO
 // =====================================================
 
 client.on('auth_failure', (msg) => {
 
     whatsappPronto = false;
+
     whatsappInicializando = false;
 
     console.error(
-        '❌ Falha na autenticação:',
+        '❌ Falha na autenticação do WhatsApp:',
         msg
     );
 
 });
 
+
 // =====================================================
-// DISCONNECTED
+// DESCONECTADO
 // =====================================================
 
 client.on('disconnected', (reason) => {
 
     whatsappPronto = false;
+
     whatsappInicializando = false;
 
     console.error(
@@ -749,6 +912,7 @@ client.on('disconnected', (reason) => {
     );
 
 });
+
 
 // =====================================================
 // PROTEÇÃO CONTRA ERROS
@@ -765,36 +929,45 @@ process.on('uncaughtException', (erro) => {
 
 });
 
+
 process.on('unhandledRejection', (erro) => {
 
     console.error(
         '⚠️ Promise rejeitada:',
+        erro?.stack ||
         erro?.message ||
         erro
     );
 
 });
 
+
 // =====================================================
-// RESPOSTA AUTOMÁTICA
+// BOT DE RESPOSTA AUTOMÁTICA
 // =====================================================
 
-const controleSaudacao = new Map();
+const controleSaudacao =
+    new Map();
 
 const tempoDeInicio =
     Math.floor(Date.now() / 1000);
+
 
 client.on('message', async (msg) => {
 
     try {
 
         // Ignora mensagens antigas
-        if (msg.timestamp < tempoDeInicio) {
+        if (
+            msg.timestamp < tempoDeInicio
+        ) {
             return;
         }
 
         // Ignora grupos
-        if (msg.from.includes('@g.us')) {
+        if (
+            msg.from.includes('@g.us')
+        ) {
             return;
         }
 
@@ -818,10 +991,7 @@ client.on('message', async (msg) => {
         const remetente =
             msg.from;
 
-        // ------------------------------------------------
-        // FALAR COM EQUIPE
-        // ------------------------------------------------
-
+        // Cliente quer falar com equipe
         if (texto === '1') {
 
             await delay(2000);
@@ -829,7 +999,10 @@ client.on('message', async (msg) => {
             await msg.reply(
 
                 '✅ *Certo!* Um de nossos profissionais ' +
-                'já vai falar com você. Aguarde um instante.'
+
+                'já vai falar com você. ' +
+
+                'Por favor, aguarde um instante.'
 
             );
 
@@ -837,22 +1010,21 @@ client.on('message', async (msg) => {
 
         }
 
-        // ------------------------------------------------
-        // CONTROLE DE SAUDAÇÃO
-        // ------------------------------------------------
-
         const ultimaMensagem =
-            controleSaudacao.get(remetente);
+            controleSaudacao.get(
+                remetente
+            );
 
         const agora =
             Date.now();
 
-        const duasHoras =
+        const tempoLimite =
             2 * 60 * 60 * 1000;
 
+        // Evita repetir saudação
         if (
             !ultimaMensagem ||
-            agora - ultimaMensagem > duasHoras
+            agora - ultimaMensagem > tempoLimite
         ) {
 
             await delay(2000);
@@ -864,17 +1036,21 @@ client.on('message', async (msg) => {
 
                 'Olá! Tudo bem? 👋\n\n' +
 
-                'Somos a *Lar Forte*, especialistas em ' +
-                'soluções e manutenção para sua casa.\n\n' +
+                'Somos a *Lar Forte*, especialistas em soluções ' +
 
-                'Para solicitar um orçamento, acesse:\n' +
+                'e manutenção para sua casa.\n\n' +
+
+                'Para agilizar seu orçamento, acesse nosso site:\n' +
 
                 `👉 ${linkSite}\n\n` +
 
                 'Ou, se preferir falar com nossa equipe agora, ' +
+
                 '*digite 1*.';
 
-            await msg.reply(saudacao);
+            await msg.reply(
+                saudacao
+            );
 
             controleSaudacao.set(
                 remetente,
@@ -886,7 +1062,7 @@ client.on('message', async (msg) => {
     } catch (erro) {
 
         console.error(
-            '❌ Erro na resposta automática:',
+            '❌ Erro no processamento do bot:',
             erro?.message || erro
         );
 
@@ -894,11 +1070,13 @@ client.on('message', async (msg) => {
 
 });
 
+
 // =====================================================
 // API DE ATENDIMENTO
 // =====================================================
 
 app.post(
+
     '/api/atendimento',
 
     limitador,
@@ -911,7 +1089,7 @@ app.post(
                 req.body || {};
 
             // =============================================
-            // SALVA CSV
+            // SALVAR CSV
             // =============================================
 
             const caminhoBanco =
@@ -948,13 +1126,17 @@ app.post(
                 `"${limpar(dados.observacoes)}"\n`;
 
             fs.appendFileSync(
+
                 caminhoBanco,
+
                 cabecalho + linhaCsv,
+
                 'utf8'
+
             );
 
             // =============================================
-            // RESPOSTA IMEDIATA
+            // RESPONDE IMEDIATAMENTE AO FRONTEND
             // =============================================
 
             res.status(200).json({
@@ -970,16 +1152,17 @@ app.post(
             });
 
             // =============================================
-            // ENVIO WHATSAPP EM BACKGROUND
+            // PROCESSAMENTO WHATSAPP EM BACKGROUND
             // =============================================
 
             setImmediate(async () => {
 
                 try {
 
-                    if (
-                        await verificarWhatsApp()
-                    ) {
+                    const whatsappDisponivel =
+                        await verificarWhatsApp();
+
+                    if (whatsappDisponivel) {
 
                         const relatorio =
 
@@ -991,7 +1174,7 @@ app.post(
 
                             `📍 *Endereço:* ${dados.endereco || 'Não informado'}\n\n` +
 
-                            '🛠️ *Detalhes do Pedido*\n' +
+                            '🛠️ *DETALHES DO PEDIDO*\n' +
 
                             `*Categoria:* ${dados.categoria || 'Não informado'}\n` +
 
@@ -1004,26 +1187,37 @@ app.post(
                         await comTimeout(
 
                             client.sendMessage(
+
                                 ID_GRUPO_FUNCIONARIOS,
+
                                 relatorio
+
                             ),
 
                             15000,
 
-                            'envio grupo'
+                            'envio relatório grupo'
 
                         );
 
-                        // -------------------------------------
-                        // MÍDIA
-                        // -------------------------------------
+                        console.log(
+                            '✅ Relatório enviado ao grupo.'
+                        );
+
+                        // =====================================
+                        // ENVIO DE FOTO
+                        // =====================================
 
                         if (
+
                             dados.enviouMidia === 'Sim' &&
+
                             dados.arquivoPreview
+
                         ) {
 
                             const base64Data =
+
                                 String(
                                     dados.arquivoPreview
                                 )
@@ -1052,16 +1246,23 @@ app.post(
                                     media,
 
                                     {
+
                                         caption:
-                                            `📸 Foto enviada por *${dados.nome || 'cliente'}*`
+
+                                            `📸 Foto enviada pelo cliente *${dados.nome || 'Não informado'}*`
+
                                     }
 
                                 ),
 
                                 30000,
 
-                                'envio mídia'
+                                'envio de mídia'
 
+                            );
+
+                            console.log(
+                                '✅ Foto enviada ao grupo.'
                             );
 
                         }
@@ -1074,7 +1275,10 @@ app.post(
 
                     }
 
-                    // Confirmação privada
+                    // =========================================
+                    // CONFIRMAÇÃO PARA CLIENTE
+                    // =========================================
+
                     await enviarConfirmacaoCliente(
                         dados
                     );
@@ -1082,7 +1286,7 @@ app.post(
                 } catch (erro) {
 
                     console.error(
-                        '❌ Erro no processamento WhatsApp:',
+                        '❌ Erro no processamento em background:',
                         erro?.message || erro
                     );
 
@@ -1102,8 +1306,10 @@ app.post(
             if (!res.headersSent) {
 
                 res.status(500).json({
+
                     erro:
                         'Falha ao processar o pedido.'
+
                 });
 
             }
@@ -1114,98 +1320,358 @@ app.post(
 
 );
 
+
 // =====================================================
-// API STATUS
+// API DO QR CODE - PNG
 // =====================================================
 
-app.get(
-    '/api/status',
+app.get('/api/qrcode', (req, res) => {
 
-    async (req, res) => {
+    // Impede cache
+    res.set({
 
-        let state = 'OFFLINE';
+        'Cache-Control':
+            'no-store, no-cache, must-revalidate, max-age=0',
 
-        try {
+        'Pragma':
+            'no-cache',
 
-            state =
-                await comTimeout(
+        'Expires':
+            '0'
 
-                    client.getState(),
+    });
 
-                    5000,
+    if (!qrImagem) {
 
-                    'getState'
+        return res.status(503).json({
 
-                );
+            sucesso: false,
 
-        } catch {
-
-            state = 'OFFLINE';
-
-        }
-
-        const memoria =
-            process.memoryUsage();
-
-        res.json({
-
-            servidor: 'online',
-
-            whatsapp:
-                whatsappPronto,
-
-            estadoWhatsapp:
-                state,
-
-            qrPendente:
-                Boolean(qrAtual),
-
-            qrExibido:
-                qrJaExibido,
-
-            memoria: {
-
-                rss:
-                    Math.round(
-                        memoria.rss /
-                        1024 /
-                        1024
-                    ) + ' MB',
-
-                heap:
-                    Math.round(
-                        memoria.heapUsed /
-                        1024 /
-                        1024
-                    ) + ' MB'
-
-            },
-
-            data:
-                new Date().toISOString()
+            mensagem:
+                'QR Code ainda não foi gerado. Aguarde alguns segundos.'
 
         });
 
     }
 
-);
+    res.set(
+        'Content-Type',
+        'image/png'
+    );
+
+    return res.send(
+        qrImagem
+    );
+
+});
+
+
+// =====================================================
+// PÁGINA DO QR CODE
+// =====================================================
+
+app.get('/qrcode', (req, res) => {
+
+    res.set(
+        'Cache-Control',
+        'no-store, no-cache, must-revalidate, max-age=0'
+    );
+
+    res.send(`
+
+<!DOCTYPE html>
+
+<html lang="pt-BR">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Lar Forte - Conectar WhatsApp</title>
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+
+            margin: 0;
+
+            min-height: 100vh;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            font-family: Arial, sans-serif;
+
+            background: #111;
+
+            color: white;
+
+        }
+
+        .container {
+
+            width: 100%;
+
+            max-width: 600px;
+
+            padding: 30px;
+
+            text-align: center;
+
+        }
+
+        h1 {
+
+            margin-bottom: 10px;
+
+        }
+
+        p {
+
+            color: #bbb;
+
+        }
+
+        #qr {
+
+            width: min(90vw, 500px);
+
+            height: auto;
+
+            background: white;
+
+            padding: 12px;
+
+            border-radius: 10px;
+
+            margin-top: 25px;
+
+        }
+
+        #status {
+
+            margin-top: 20px;
+
+            color: #aaa;
+
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>📱 Conectar WhatsApp</h1>
+
+        <p>
+            Abra o WhatsApp da empresa e escaneie o QR Code abaixo.
+        </p>
+
+        <img
+            id="qr"
+            src="/api/qrcode?${Date.now()}"
+            alt="QR Code do WhatsApp"
+        >
+
+        <div id="status">
+            Carregando QR Code...
+        </div>
+
+    </div>
+
+    <script>
+
+        const qr =
+            document.getElementById('qr');
+
+        const status =
+            document.getElementById('status');
+
+
+        async function atualizarStatus() {
+
+            try {
+
+                const resposta =
+                    await fetch(
+                        '/api/status?ts=' + Date.now()
+                    );
+
+                const dados =
+                    await resposta.json();
+
+                if (dados.whatsapp) {
+
+                    status.textContent =
+                        '✅ WhatsApp conectado com sucesso!';
+
+                    qr.style.display =
+                        'none';
+
+                    return;
+
+                }
+
+                if (dados.qrPendente) {
+
+                    status.textContent =
+                        '📱 QR Code pronto. Escaneie com o WhatsApp.';
+
+                } else {
+
+                    status.textContent =
+                        '⏳ Aguardando geração do QR Code...';
+
+                }
+
+            } catch {
+
+                status.textContent =
+                    '⚠️ Aguardando conexão com o servidor...';
+
+            }
+
+        }
+
+
+        function atualizarImagem() {
+
+            qr.src =
+                '/api/qrcode?ts=' +
+                Date.now();
+
+        }
+
+
+        setInterval(
+            atualizarStatus,
+            3000
+        );
+
+
+        setInterval(
+            atualizarImagem,
+            15000
+        );
+
+
+        atualizarStatus();
+
+    </script>
+
+</body>
+
+</html>
+
+    `);
+
+});
+
+
+// =====================================================
+// API STATUS
+// =====================================================
+
+app.get('/api/status', async (req, res) => {
+
+    let state =
+        'OFFLINE';
+
+    try {
+
+        state =
+            await comTimeout(
+
+                client.getState(),
+
+                5000,
+
+                'getState'
+
+            );
+
+    } catch {
+
+        state =
+            'OFFLINE';
+
+    }
+
+    const memoria =
+        process.memoryUsage();
+
+    res.json({
+
+        servidor:
+            'online',
+
+        whatsapp:
+            whatsappPronto,
+
+        estadoWhatsapp:
+            state,
+
+        qrPendente:
+            Boolean(qrImagem),
+
+        qrGeradoEm:
+            qrGeradoEm,
+
+        memoria: {
+
+            rss:
+                Math.round(
+                    memoria.rss / 1024 / 1024
+                ) + ' MB',
+
+            heap:
+                Math.round(
+                    memoria.heapUsed / 1024 / 1024
+                ) + ' MB'
+
+        },
+
+        data:
+            new Date().toISOString()
+
+    });
+
+});
+
 
 // =====================================================
 // HEALTH CHECK
 // =====================================================
 
-app.get(
-    '/health',
+app.get('/health', (req, res) => {
 
-    (req, res) => {
+    res.status(200).json({
 
-        res.status(200).json({
-            status: 'ok'
-        });
+        status:
+            'ok',
 
-    }
+        whatsapp:
+            whatsappPronto
 
-);
+    });
+
+});
+
 
 // =====================================================
 // FRONTEND VITE
@@ -1224,7 +1690,7 @@ if (fs.existsSync(distPath)) {
     );
 
     app.get(
-        /^(?!\/api\/|\/health).*/,
+        /^(?!\/api\/|\/health|\/qrcode).*/,
         (req, res) => {
 
             res.sendFile(
@@ -1239,8 +1705,9 @@ if (fs.existsSync(distPath)) {
 
 }
 
+
 // =====================================================
-// INICIALIZAÇÃO DO WHATSAPP
+// INICIALIZAR WHATSAPP
 // =====================================================
 
 async function iniciarWhatsApp() {
@@ -1258,7 +1725,10 @@ async function iniciarWhatsApp() {
     whatsappInicializando = true;
 
     console.log('');
-    console.log('⏳ Inicializando WhatsApp...');
+    console.log(
+        '⏳ Inicializando WhatsApp...'
+    );
+
     console.log('');
 
     try {
@@ -1270,6 +1740,7 @@ async function iniciarWhatsApp() {
         whatsappInicializando = false;
 
         console.error('');
+
         console.error(
             '❌ Erro ao inicializar WhatsApp:'
         );
@@ -1286,8 +1757,9 @@ async function iniciarWhatsApp() {
 
 }
 
+
 // =====================================================
-// INICIA SERVIDOR PRIMEIRO
+// INICIAR SERVIDOR
 // =====================================================
 
 app.listen(
@@ -1300,7 +1772,6 @@ app.listen(
             `🚀 Servidor Lar Forte rodando na porta ${PORT}`
         );
 
-        // Inicializa WhatsApp uma única vez
         iniciarWhatsApp();
 
     }

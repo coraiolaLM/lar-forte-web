@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-  "dev": "vite",
-  "build": "vite build",
-  "start": "node server.js",
-  "lint": "eslint .",
-  "preview": "vite preview"
-},
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server.js",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "cors": "^2.8.6",
@@ -17,6 +17,7 @@
     "express-rate-limit": "^8.7.0",
     "lucide-react": "^1.39.0",
     "puppeteer": "24.38.0",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
