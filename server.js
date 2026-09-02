@@ -89,14 +89,20 @@ const limitador = rateLimit({
 
 console.log('🚀 Iniciando cliente do WhatsApp...');
 
+const chromePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    process.env.CHROME_PATH ||
+    puppeteer.executablePath();
+
+console.log('🌐 Chrome configurado:', chromePath);
+
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: 'lar-forte'
     }),
-
     puppeteer: {
         headless: true,
-
+        executablePath: chromePath,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
