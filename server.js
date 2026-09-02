@@ -21,10 +21,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({
-    limit: '50mb',
-    extended: true
-}));
+
+app.use(
+    express.urlencoded({
+        limit: '50mb',
+        extended: true
+    })
+);
 
 // ============================================
 // CORS
@@ -33,40 +36,45 @@ app.use(express.urlencoded({
 const allowedOrigins = [
     'http://localhost:5173',
     'http://localhost:5174',
+    'https://larforte.onrender.com',
     process.env.FRONTEND_URL
 ].filter(Boolean);
 
-app.use(cors({
-    origin: (origin, callback) => {
-        // Permite chamadas sem Origin, como Postman,
-        // health checks e comunicação interna
-        if (!origin || allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        }
+app.use(
+    cors({
+        origin: (origin, callback) => {
+            if (!origin) {
+                return callback(null, true);
+            }
 
-        console.log(`⚠️ Origem bloqueada pelo CORS: ${origin}`);
+            if (allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
 
-        return callback(
-            new Error(`Origem não permitida pelo CORS: ${origin}`)
-        );
-    },
+            console.log(`⚠️ Origem bloqueada pelo CORS: ${origin}`);
 
-    methods: [
-        'GET',
-        'POST',
-        'PUT',
-        'PATCH',
-        'DELETE',
-        'OPTIONS'
-    ],
+            return callback(
+                new Error(`Origem não permitida pelo CORS: ${origin}`)
+            );
+        },
 
-    allowedHeaders: [
-        'Content-Type',
-        'Authorization'
-    ],
+        methods: [
+            'GET',
+            'POST',
+            'PUT',
+            'PATCH',
+            'DELETE',
+            'OPTIONS'
+        ],
 
-    credentials: true
-}));
+        allowedHeaders: [
+            'Content-Type',
+            'Authorization'
+        ],
+
+        credentials: true
+    })
+);
 
 // ============================================
 // RATE LIMIT
@@ -84,25 +92,61 @@ const limitador = rateLimit({
     }
 });
 
+// ============================================
+// WHATSAPP / CHROME
+// ============================================
+
 console.log('🚀 Iniciando cliente do WhatsApp...');
 
-const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
+let chromePath;
 
-console.log('🌐 Chrome configurado em:', chromePath);
+try {
+    chromePath =
+        process.env.PUPPETEER_EXECUTABLE_PATH ||
+        puppeteer.executablePath();
 
-if (!fs.existsSync(chromePath)) {
-    console.error('❌ ARQUIVO DO CHROME NÃO EXISTE:', chromePath);
-} else {
-    console.log('✅ Arquivo do Chrome encontrado!');
+    console.log('🌐 Chrome configurado em:', chromePath);
+
+    if (!chromePath) {
+        console.error('❌ Caminho do Chrome não foi encontrado.');
+    } else if (!fs.existsSync(chromePath)) {
+        console.error(
+            '❌ ARQUIVO DO CHROME NÃO EXISTE:',
+            chromePath
+        );
+    } else {
+        console.log('✅ Arquivo do Chrome encontrado!');
+    }
+} catch (erroChrome) {
+    console.error(
+        '❌ Erro ao localizar Chrome:',
+        erroChrome?.message || erroChrome
+    );
 }
+
+// ============================================
+// AUTENTICAÇÃO WHATSAPP
+// ============================================
+
+const authPath = path.join(
+    __dirname,
+    '.wwebjs_auth'
+);
+
 const client = new Client({
     authStrategy: new LocalAuth({
-        clientId: 'lar-forte'
+        clientId: 'lar-forte',
+        dataPath: authPath
     }),
 
     puppeteer: {
         headless: true,
-        executablePath: chromePath,
+
+        ...(chromePath
+            ? {
+                executablePath: chromePath
+            }
+            : {}),
 
         args: [
             '--no-sandbox',
@@ -110,21 +154,24 @@ const client = new Client({
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--no-first-run',
-            '--no-zygote'
+            '--no-zygote',
+            '--disable-software-rasterizer'
         ]
     }
 });
 
-const ID_GRUPO_FUNCIONARIOS = '120363409125356830@g.us';
+const ID_GRUPO_FUNCIONARIOS =
+    '120363409125356830@g.us';
 
 let whatsappPronto = false;
+let whatsappInicializando = false;
 
 // ============================================
 // FUNÇÕES AUXILIARES
 // ============================================
 
 const delay = (ms) =>
-    new Promise(resolve => setTimeout(resolve, ms));
+    new Promise((resolve) => setTimeout(resolve, ms));
 
 async function comTimeout(
     promise,
@@ -133,15 +180,17 @@ async function comTimeout(
 ) {
     let timeoutId;
 
-    const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => {
-            reject(
-                new Error(
-                    `Tempo limite excedido em ${nomeOperacao} (${tempoMs}ms)`
-                )
-            );
-        }, tempoMs);
-    });
+    const timeoutPromise = new Promise(
+        (_, reject) => {
+            timeoutId = setTimeout(() => {
+                reject(
+                    new Error(
+                        `Tempo limite excedido em ${nomeOperacao} (${tempoMs}ms)`
+                    )
+                );
+            }, tempoMs);
+        }
+    );
 
     try {
         return await Promise.race([
@@ -166,11 +215,10 @@ async function verificarWhatsApp() {
         );
 
         return state === 'CONNECTED';
-
     } catch (error) {
         console.error(
             '⚠️ Não foi possível confirmar o estado do WhatsApp:',
-            error.message || error
+            error?.message || error
         );
 
         return false;
@@ -192,19 +240,18 @@ function analisarTelefone(telefone) {
 
     let numero = String(telefone).replace(/\D/g, '');
 
-    // Remove prefixo internacional 00
     if (numero.startsWith('00')) {
         numero = numero.substring(2);
     }
 
-    // Adiciona código do Brasil
     if (!numero.startsWith('55')) {
         numero = `55${numero}`;
     }
 
-    // Brasil:
-    // 55 + DDD + 8 ou 9 dígitos
-    if (numero.length !== 12 && numero.length !== 13) {
+    if (
+        numero.length !== 12 &&
+        numero.length !== 13
+    ) {
         return {
             valido: false,
             motivo: 'NUMERO_INVALIDO',
@@ -227,7 +274,6 @@ function analisarTelefone(telefone) {
         };
     }
 
-    // Celular com 9 dígitos deve começar com 9
     if (numero.length === 13) {
         const celular = numero.substring(4);
 
@@ -249,7 +295,7 @@ function analisarTelefone(telefone) {
 }
 
 // ============================================
-// CLASSIFICAÇÃO DE ERROS DO WHATSAPP
+// CLASSIFICAÇÃO DE ERROS
 // ============================================
 
 function classificarErroWhatsApp(error) {
@@ -292,7 +338,7 @@ function classificarErroWhatsApp(error) {
 }
 
 // ============================================
-// ENVIO DE CONFIRMAÇÃO PARA O CLIENTE
+// ENVIO DE CONFIRMAÇÃO AO CLIENTE
 // ============================================
 
 async function enviarConfirmacaoCliente(dados) {
@@ -301,7 +347,8 @@ async function enviarConfirmacaoCliente(dados) {
     console.log('📨 ENVIO DE CONFIRMAÇÃO AO CLIENTE');
     console.log('============================================');
 
-    const analiseTelefone = analisarTelefone(dados.telefone);
+    const analiseTelefone =
+        analisarTelefone(dados.telefone);
 
     if (!analiseTelefone.valido) {
         console.error(
@@ -334,20 +381,15 @@ async function enviarConfirmacaoCliente(dados) {
     }
 
     const mensagemCliente =
-        `Olá, *${dados.nome}*! 👋\n\n` +
+        `Olá, *${dados.nome || 'cliente'}*! 👋\n\n` +
         `Recebemos com sucesso o seu pedido de orçamento ` +
-        `para o serviço de *${dados.servicoEspecifico}*.\n\n` +
+        `para o serviço de *${dados.servicoEspecifico || 'solicitado'}*.\n\n` +
         `Nossa equipe já foi notificada e entraremos em contato ` +
         `muito em breve para agendar uma visita ou alinhar ` +
         `os próximos detalhes.\n\n` +
         `Agradecemos por escolher a *Lar Forte*! 🏠🛠️`;
 
     let contactId = null;
-
-    // ----------------------------------------
-    // TENTATIVA 1
-    // Encontrar o contato pelo número
-    // ----------------------------------------
 
     try {
         console.log(
@@ -369,23 +411,11 @@ async function enviarConfirmacaoCliente(dados) {
                 '🆔 Contact ID:',
                 contactId._serialized
             );
-
-            console.log(
-                '👤 User:',
-                contactId.user
-            );
-
-            console.log(
-                '🌐 Server:',
-                contactId.server
-            );
-
         } else {
             console.log(
                 '⚠️ getNumberId não encontrou o contato.'
             );
         }
-
     } catch (erroGetId) {
         const tipoErro =
             classificarErroWhatsApp(erroGetId);
@@ -396,15 +426,10 @@ async function enviarConfirmacaoCliente(dados) {
         );
     }
 
-    // ----------------------------------------
-    // TENTATIVA 2
-    // Enviar usando o Contact ID
-    // ----------------------------------------
-
     if (contactId?._serialized) {
         try {
             console.log(
-                '📤 Tentativa 2: enviando usando contactId._serialized...'
+                '📤 Tentativa 2: enviando usando Contact ID...'
             );
 
             await comTimeout(
@@ -413,7 +438,7 @@ async function enviarConfirmacaoCliente(dados) {
                     mensagemCliente
                 ),
                 15000,
-                'sendMessage(contactId._serialized)'
+                'sendMessage(Contact ID)'
             );
 
             console.log(
@@ -425,22 +450,13 @@ async function enviarConfirmacaoCliente(dados) {
                 motivo: 'ENVIADO',
                 metodo: 'CONTACT_ID'
             };
-
         } catch (erroEnvioId) {
-            const tipoErro =
-                classificarErroWhatsApp(erroEnvioId);
-
             console.error(
-                `❌ Falha enviando pelo contactId [${tipoErro}]:`,
+                '❌ Falha enviando pelo Contact ID:',
                 erroEnvioId?.message || erroEnvioId
             );
         }
     }
-
-    // ----------------------------------------
-    // TENTATIVA 3
-    // Envio direto pelo número
-    // ----------------------------------------
 
     try {
         console.log(
@@ -458,7 +474,7 @@ async function enviarConfirmacaoCliente(dados) {
         );
 
         console.log(
-            `✅ MENSAGEM ENVIADA POR NÚMERO PARA ${dados.nome} (${numero})`
+            `✅ MENSAGEM ENVIADA POR NÚMERO PARA ${dados.nome}`
         );
 
         return {
@@ -466,7 +482,6 @@ async function enviarConfirmacaoCliente(dados) {
             motivo: 'ENVIADO',
             metodo: 'NUMERO_DIRETO'
         };
-
     } catch (erroEnvioDireto) {
         const tipoErro =
             classificarErroWhatsApp(erroEnvioDireto);
@@ -476,115 +491,9 @@ async function enviarConfirmacaoCliente(dados) {
             erroEnvioDireto?.message || erroEnvioDireto
         );
 
-        // ------------------------------------
-        // ERRO DE LID
-        // ------------------------------------
-
-        if (tipoErro === 'LID_ERROR') {
-            console.error('');
-            console.error(
-                '⚠️ O NÚMERO É VÁLIDO, MAS O WHATSAPP NÃO CONSEGUIU RESOLVER O LID.'
-            );
-
-            console.error(
-                `⚠️ Cliente: ${dados.nome}`
-            );
-
-            console.error(
-                `⚠️ Número: ${numero}`
-            );
-
-            try {
-                await comTimeout(
-                    client.sendMessage(
-                        ID_GRUPO_FUNCIONARIOS,
-
-                        `⚠️ *FALHA NO ENVIO DO PV*\n\n` +
-                        `O pedido de *${dados.nome}* foi recebido normalmente, ` +
-                        `porém o WhatsApp não conseguiu resolver o identificador ` +
-                        `interno (LID) desse contato.\n\n` +
-                        `📱 Número: ${dados.telefone}\n` +
-                        `🛠️ Serviço: ${dados.servicoEspecifico}\n\n` +
-                        `⚠️ *O número NÃO foi classificado como inválido.*`
-                    ),
-
-                    10000,
-                    'aviso LID no grupo'
-                );
-
-            } catch (erroAviso) {
-                console.error(
-                    '⚠️ Não foi possível enviar aviso de LID ao grupo:',
-                    erroAviso?.message || erroAviso
-                );
-            }
-
-            return {
-                sucesso: false,
-                motivo: 'LID_ERROR'
-            };
-        }
-
-        // ------------------------------------
-        // NÚMERO NÃO ENCONTRADO
-        // ------------------------------------
-
-        if (tipoErro === 'NUMERO_NAO_ENCONTRADO') {
-            console.error(
-                `⚠️ Número ${numero} não possui WhatsApp ou não pôde ser localizado.`
-            );
-
-            try {
-                await comTimeout(
-                    client.sendMessage(
-                        ID_GRUPO_FUNCIONARIOS,
-
-                        `⚠️ *WHATSAPP NÃO LOCALIZADO*\n\n` +
-                        `Cliente: *${dados.nome}*\n` +
-                        `Telefone: ${dados.telefone}\n` +
-                        `Serviço: ${dados.servicoEspecifico}\n\n` +
-                        `O número foi validado, mas não foi localizado como usuário WhatsApp.`
-                    ),
-
-                    10000,
-                    'aviso número não encontrado'
-                );
-
-            } catch (erroAviso) {
-                console.error(
-                    '⚠️ Falha ao enviar aviso ao grupo:',
-                    erroAviso?.message || erroAviso
-                );
-            }
-
-            return {
-                sucesso: false,
-                motivo: 'NUMERO_NAO_ENCONTRADO'
-            };
-        }
-
-        // ------------------------------------
-        // WHATSAPP OFFLINE
-        // ------------------------------------
-
-        if (tipoErro === 'WHATSAPP_OFFLINE') {
-            console.error(
-                '❌ WhatsApp ficou indisponível durante o envio.'
-            );
-
-            return {
-                sucesso: false,
-                motivo: 'WHATSAPP_OFFLINE'
-            };
-        }
-
-        console.error(
-            `❌ Erro de envio não classificado para ${numero}.`
-        );
-
         return {
             sucesso: false,
-            motivo: 'ERRO_ENVIO',
+            motivo: tipoErro,
             erro:
                 erroEnvioDireto?.message ||
                 String(erroEnvioDireto)
@@ -599,6 +508,11 @@ async function enviarConfirmacaoCliente(dados) {
 client.on('qr', (qr) => {
     whatsappPronto = false;
 
+    console.log('');
+    console.log('============================================');
+    console.log('📱 NOVO QR CODE GERADO');
+    console.log('============================================');
+
     qrcode.generate(qr, {
         small: true
     });
@@ -610,18 +524,28 @@ client.on('qr', (qr) => {
 
 client.on('ready', () => {
     whatsappPronto = true;
+    whatsappInicializando = false;
+
+    console.log(
+        '============================================'
+    );
 
     console.log(
         '✅ Bot do WhatsApp conectado e pronto para enviar mensagens!'
     );
+
+    console.log(
+        '============================================'
+    );
 });
 
 client.on('authenticated', () => {
-    console.log('🔐 WhatsApp autenticado.');
+    console.log('🔐 WhatsApp autenticado com sucesso.');
 });
 
 client.on('auth_failure', (msg) => {
     whatsappPronto = false;
+    whatsappInicializando = false;
 
     console.error(
         '❌ Falha na autenticação do WhatsApp:',
@@ -631,6 +555,7 @@ client.on('auth_failure', (msg) => {
 
 client.on('disconnected', (reason) => {
     whatsappPronto = false;
+    whatsappInicializando = false;
 
     console.error(
         '⚠️ WhatsApp desconectado:',
@@ -645,7 +570,7 @@ client.on('disconnected', (reason) => {
 process.on('uncaughtException', (err) => {
     console.error(
         '⚠️ Erro crítico:',
-        err.message || err
+        err?.stack || err?.message || err
     );
 });
 
@@ -667,12 +592,10 @@ const tempoDeInicio =
 
 client.on('message', async (msg) => {
     try {
-        // Ignora mensagens anteriores à inicialização
         if (msg.timestamp < tempoDeInicio) {
             return;
         }
 
-        // Ignora grupos, status e mensagens próprias
         if (
             msg.from.includes('@g.us') ||
             msg.from === 'status@broadcast' ||
@@ -688,7 +611,6 @@ client.on('message', async (msg) => {
 
         const remetente = msg.from;
 
-        // Cliente escolheu falar com a equipe
         if (texto === '1') {
             await delay(2500);
 
@@ -713,7 +635,7 @@ client.on('message', async (msg) => {
         ) {
             const tempoEspera =
                 Math.floor(
-                    Math.random() * (4000 - 2000 + 1)
+                    Math.random() * 2000
                 ) + 2000;
 
             await delay(tempoEspera);
@@ -735,7 +657,6 @@ client.on('message', async (msg) => {
                 agora
             );
         }
-
     } catch (erroGeral) {
         console.error(
             '❌ Erro interno no processamento do bot:',
@@ -751,20 +672,23 @@ client.on('message', async (msg) => {
 app.post(
     '/api/atendimento',
     limitador,
-
     async (req, res) => {
         try {
             const dados = req.body || {};
 
-            // --------------------------------
-            // SALVAR CSV
-            // --------------------------------
+            console.log(
+                '📨 Novo atendimento recebido:',
+                dados.nome || 'Cliente não identificado'
+            );
 
-            const caminhoBanco =
-                path.join(
-                    __dirname,
-                    'banco_de_dados.csv'
-                );
+            // ----------------------------------------
+            // SALVAR CSV
+            // ----------------------------------------
+
+            const caminhoBanco = path.join(
+                __dirname,
+                'banco_de_dados.csv'
+            );
 
             const cabecalho =
                 !fs.existsSync(caminhoBanco)
@@ -787,9 +711,9 @@ app.post(
                 'utf8'
             );
 
-            // --------------------------------
+            // ----------------------------------------
             // RELATÓRIO PARA O GRUPO
-            // --------------------------------
+            // ----------------------------------------
 
             const relatorio =
                 `🚨 *NOVO CHAMADO VIA SITE* 🚨\n\n` +
@@ -812,35 +736,32 @@ app.post(
                             ID_GRUPO_FUNCIONARIOS,
                             relatorio
                         ),
-
                         15000,
                         'envio relatório grupo'
                     );
 
-                    // ------------------------
-                    // ENVIO DE FOTO
-                    // ------------------------
+                    console.log(
+                        '✅ Relatório enviado para o grupo.'
+                    );
 
                     if (
                         dados.enviouMidia === 'Sim' &&
                         dados.arquivoPreview
                     ) {
                         const base64Data =
-                            String(
-                                dados.arquivoPreview
-                            )
+                            String(dados.arquivoPreview)
                                 .split(';base64,')
                                 .pop();
 
                         const media =
                             new MessageMedia(
                                 dados.mimetype ||
-                                    'image/jpeg',
+                                'image/jpeg',
 
                                 base64Data,
 
                                 dados.filename ||
-                                    'arquivo.jpg'
+                                'arquivo.jpg'
                             );
 
                         await comTimeout(
@@ -849,16 +770,22 @@ app.post(
                                 media,
                                 {
                                     caption:
-                                        `📸 Foto enviada pelo cliente *${dados.nome}*`
+                                        `📸 Foto enviada pelo cliente *${dados.nome || 'Cliente'}*`
                                 }
                             ),
-
                             30000,
                             'envio de mídia grupo'
                         );
-                    }
-                }
 
+                        console.log(
+                            '✅ Mídia enviada para o grupo.'
+                        );
+                    }
+                } else {
+                    console.log(
+                        '⚠️ WhatsApp offline. Pedido salvo, mas relatório não enviado.'
+                    );
+                }
             } catch (erroGrupo) {
                 console.error(
                     '❌ Erro ao enviar relatório para grupo:',
@@ -866,23 +793,25 @@ app.post(
                 );
             }
 
-            // --------------------------------
+            // ----------------------------------------
             // RESPONDE AO FRONTEND
-            // --------------------------------
+            // ----------------------------------------
 
             res.status(200).json({
                 sucesso: true,
-                mensagem: 'Pedido registrado com sucesso!'
+                mensagem:
+                    'Pedido registrado com sucesso!'
             });
 
-            // --------------------------------
+            // ----------------------------------------
             // ENVIA CONFIRMAÇÃO EM BACKGROUND
-            // --------------------------------
+            // ----------------------------------------
 
             setImmediate(async () => {
                 try {
-                    await enviarConfirmacaoCliente(dados);
-
+                    await enviarConfirmacaoCliente(
+                        dados
+                    );
                 } catch (erroBackground) {
                     console.error(
                         '❌ Erro no envio em segundo plano:',
@@ -891,7 +820,6 @@ app.post(
                     );
                 }
             });
-
         } catch (error) {
             console.error(
                 '💥 ERRO INESPERADO NA ROTA /api/atendimento:',
@@ -902,7 +830,8 @@ app.post(
 
             if (!res.headersSent) {
                 return res.status(500).json({
-                    erro: 'Falha ao processar o pedido.'
+                    erro:
+                        'Falha ao processar o pedido.'
                 });
             }
         }
@@ -913,25 +842,39 @@ app.post(
 // STATUS DA API
 // ============================================
 
-app.get('/api/status', async (req, res) => {
-    let state = 'UNKNOWN';
+app.get(
+    '/api/status',
+    async (req, res) => {
+        let state = 'UNKNOWN';
 
-    try {
-        state = await comTimeout(
-            client.getState(),
-            5000,
-            'getState'
-        );
+        try {
+            state = await comTimeout(
+                client.getState(),
+                5000,
+                'getState'
+            );
+        } catch {
+            state = 'OFFLINE';
+        }
 
-    } catch {
-        state = 'OFFLINE';
+        res.json({
+            servidor: 'online',
+            whatsapp: whatsappPronto,
+            estadoWhatsapp: state,
+            chrome: chromePath || null,
+            data: new Date().toISOString()
+        });
     }
+);
 
-    res.json({
-        servidor: 'online',
-        whatsapp: whatsappPronto,
-        estadoWhatsapp: state,
-        data: new Date().toISOString()
+// ============================================
+// HEALTH CHECK
+// ============================================
+
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        whatsapp: whatsappPronto
     });
 });
 
@@ -942,30 +885,65 @@ app.get('/api/status', async (req, res) => {
 const distPath =
     path.join(__dirname, 'dist');
 
-// Arquivos estáticos
 app.use(express.static(distPath));
 
-// React Router
-app.get(/^(?!\/api\/).*/, (req, res) => {
-    res.sendFile(
-        path.join(distPath, 'index.html')
-    );
-});
+app.get(
+    /^\/(?!api\/|health$).*/,
+    (req, res) => {
+        res.sendFile(
+            path.join(
+                distPath,
+                'index.html'
+            )
+        );
+    }
+);
 
 // ============================================
-// INICIALIZAÇÃO
+// INICIALIZAÇÃO DO WHATSAPP
 // ============================================
 
-client.initialize()
-    .catch((erro) => {
+async function iniciarWhatsApp() {
+    if (whatsappInicializando) {
+        console.log(
+            '⚠️ WhatsApp já está sendo inicializado.'
+        );
+
+        return;
+    }
+
+    whatsappInicializando = true;
+
+    try {
+        console.log(
+            '🚀 Inicializando conexão com WhatsApp...'
+        );
+
+        await client.initialize();
+    } catch (erro) {
+        whatsappInicializando = false;
+
         console.error(
             '❌ Erro ao inicializar WhatsApp:',
-            erro?.message || erro
+            erro?.stack ||
+            erro?.message ||
+            erro
         );
-    });
+    }
+}
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(
-        `🚀 Servidor Lar Forte rodando na porta ${PORT}`
-    );
-});
+// ============================================
+// INICIALIZAÇÃO DO SERVIDOR
+// ============================================
+
+app.listen(
+    PORT,
+    '0.0.0.0',
+    () => {
+        console.log(
+            `🚀 Servidor Lar Forte rodando na porta ${PORT}`
+        );
+
+        iniciarWhatsApp();
+    }
+);
