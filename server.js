@@ -146,49 +146,44 @@ const client = new Client({
     }),
 
     puppeteer: {
+    headless: true,
 
-        headless: true,
+    executablePath: chromePath,
 
-        executablePath: chromePath,
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
 
-        args: [
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
 
-            // Necessário no Render
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
+        '--disable-extensions',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-translate',
 
-            // Economia de memória
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-software-rasterizer',
-            '--disable-extensions',
-            '--disable-default-apps',
-            '--disable-sync',
+        '--disable-background-networking',
+        '--disable-component-update',
+        '--disable-breakpad',
 
-            // Processos e serviços extras
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-breakpad',
-            '--disable-component-update',
+        '--disable-features=Translate,MediaRouter,OptimizationHints,ProcessPerSiteUpToMainFrameThreshold',
 
-            // Recursos desnecessários
-            '--disable-notifications',
-            '--disable-popup-blocking',
-            '--disable-translate',
-            '--mute-audio',
+        '--no-first-run',
+        '--no-zygote',
 
-            // Inicialização
-            '--no-first-run',
-            '--no-zygote',
+        '--mute-audio',
 
-            // Economia de cache
-            '--disk-cache-size=1',
-            '--media-cache-size=1',
+        '--disk-cache-size=0',
+        '--media-cache-size=0',
 
-            // Menor uso gráfico
-            '--window-size=800,600'
-        ]
-    }
+        '--disable-application-cache',
+
+        '--window-size=600,400',
+
+        '--renderer-process-limit=1'
+    ]
+}
 });
 
 const ID_GRUPO_FUNCIONARIOS =
