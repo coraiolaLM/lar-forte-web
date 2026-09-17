@@ -1,1644 +1,991 @@
 import express from 'express';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
-import wwebjs from 'whatsapp-web.js';
-import puppeteer from 'puppeteer';
+import multer from 'multer';
+import makeWASocket, {
+    DisconnectReason,
+    useMultiFileAuthState
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import P from 'pino';
 import QRCode from 'qrcode';
-
-const {
-    Client,
-    LocalAuth,
-    MessageMedia
-} = wwebjs;
-
-// =====================================================
-// CAMINHOS
-// =====================================================
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// =====================================================
-// EXPRESS
-// =====================================================
-
 const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+const FRONTEND_URL = process.env.VITE_SITE_URL || 'http://localhost:5173';
+const NOME_GRUPO_CHAMADOS = 'CHAMADOS';
+const TEMPO_TRAVA_MS = 18 * 60 * 60 * 1000;
+const DELAY_MIN_MS = 4000;
+const DELAY_MAX_MS = 8000;
+const DIGITANDO_MIN_MS = 2000;
+const DIGITANDO_MAX_MS = 4000;
 
-const PORT =
-    Number(process.env.PORT) || 3000;
+let sock = null;
+let currentQRDataURL = null;
+let isConnected = false;
+let idGrupoChamados = null;
+let filaEnviosWhatsApp = Promise.resolve();
+const cooldownsAutoResposta = new Map();
 
-// =====================================================
-// BODY
-// =====================================================
+const uploadsDir = path.join(__dirname, 'uploads');
 
-app.use(
-    express.json({
-        limit: '15mb'
-    })
-);
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
-app.use(
-    express.urlencoded({
-        limit: '15mb',
-        extended: true
-    })
-);
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 
-// =====================================================
-// CORS
-// =====================================================
-
-const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    process.env.FRONTEND_URL
-].filter(Boolean);
-
-app.use(
-    cors({
-        origin: (origin, callback) => {
-
-            if (
-                !origin ||
-                allowedOrigins.includes(origin)
-            ) {
-                return callback(null, true);
-            }
-
-            console.log(
-                '⚠️ CORS bloqueado:',
-                origin
-            );
-
-            return callback(
-                new Error(
-                    `Origem não permitida: ${origin}`
-                )
-            );
-        },
-
-        methods: [
-            'GET',
-            'POST',
-            'OPTIONS'
-        ],
-
-        allowedHeaders: [
-            'Content-Type',
-            'Authorization'
-        ]
-    })
-);
-
-// =====================================================
-// RATE LIMIT
-// =====================================================
-
-const limitador = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-
-    standardHeaders: true,
-    legacyHeaders: false,
-
-    message: {
-        erro:
-            'Muitas solicitações. Tente novamente mais tarde.'
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+        const nomeSeguro = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(
+            null,
+            `${Date.now()}-${Math.random().toString(36).substring(2)}-${nomeSeguro}`
+        );
     }
 });
 
-// =====================================================
-// ESTADO WHATSAPP
-// =====================================================
+const upload = multer({
+    storage,
+    limits: {
+        fileSize: 100 * 1024 * 1024
+    },
+    fileFilter: (req, file, cb) => {
+        const tiposPermitidos = [
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+            'image/gif',
+            'video/mp4',
+            'video/webm',
+            'video/quicktime'
+        ];
 
-let whatsappPronto = false;
-let whatsappInicializando = false;
-
-let qrSvg = null;
-let qrGeradoEm = null;
-
-// =====================================================
-// CHROME
-// =====================================================
-
-console.log('');
-console.log('🚀 Preparando WhatsApp...');
-
-let chromePath = '';
-
-try {
-
-    chromePath =
-        process.env.PUPPETEER_EXECUTABLE_PATH ||
-        puppeteer.executablePath();
-
-    console.log(
-        '🌐 Chrome:',
-        chromePath
-    );
-
-    if (
-        !fs.existsSync(chromePath)
-    ) {
-
-        console.error(
-            '❌ Chrome não encontrado:',
-            chromePath
-        );
-
-    } else {
-
-        console.log(
-            '✅ Chrome encontrado.'
-        );
-
-    }
-
-} catch (error) {
-
-    console.error(
-        '❌ Erro ao localizar Chrome:',
-        error?.message || error
-    );
-
-}
-
-// =====================================================
-// AUTENTICAÇÃO
-// =====================================================
-
-// Windows:
-// tira a sessão de dentro do OneDrive.
-//
-// Render/Linux:
-// mantém dentro do diretório do serviço.
-
-const authPath =
-    process.platform === 'win32'
-
-        ? path.join(
-            process.env.LOCALAPPDATA ||
-            process.env.APPDATA ||
-            __dirname,
-            'LarForteWhatsAppAuth'
-        )
-
-        : path.join(
-            __dirname,
-            '.wwebjs_auth'
-        );
-
-console.log(
-    '📁 Sessão WhatsApp:',
-    authPath
-);
-
-try {
-
-    fs.mkdirSync(
-        authPath,
-        {
-            recursive: true
+        if (tiposPermitidos.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Tipo de arquivo não permitido.'));
         }
-    );
-
-} catch (error) {
-
-    console.error(
-        '⚠️ Erro criando pasta da sessão:',
-        error?.message || error
-    );
-
-}
-
-// =====================================================
-// CLIENTE WHATSAPP
-// =====================================================
-
-const client = new Client({
-
-    authStrategy: new LocalAuth({
-        clientId: 'lar-forte',
-        dataPath: authPath
-    }),
-
-    puppeteer: {
-
-        headless: true,
-
-        executablePath: chromePath,
-
-        timeout: 120000,
-
-        protocolTimeout: 120000,
-
-        args: [
-
-            '--no-sandbox',
-
-            '--disable-setuid-sandbox',
-
-            '--disable-dev-shm-usage',
-
-            '--disable-gpu',
-
-            '--disable-software-rasterizer',
-
-            '--disable-extensions',
-
-            '--disable-default-apps',
-
-            '--disable-background-networking',
-
-            '--disable-background-timer-throttling',
-
-            '--disable-backgrounding-occluded-windows',
-
-            '--disable-renderer-backgrounding',
-
-            '--disable-breakpad',
-
-            '--disable-component-update',
-
-            '--disable-sync',
-
-            '--disable-notifications',
-
-            '--disable-popup-blocking',
-
-            '--disable-translate',
-
-            '--disable-features=Translate,MediaRouter,OptimizationHints',
-
-            '--mute-audio',
-
-            '--no-first-run',
-
-            '--no-zygote',
-
-            // IMPORTANTE PARA O LIMITE DE 512 MB
-            '--single-process',
-
-            '--renderer-process-limit=1',
-
-            '--disable-site-isolation-trials',
-
-            '--disk-cache-size=1',
-
-            '--media-cache-size=1',
-
-            '--window-size=800,600'
-
-        ]
-
     }
-
 });
 
-// =====================================================
-// GRUPO
-// =====================================================
-
-const ID_GRUPO_FUNCIONARIOS =
-    '120363409125356830@g.us';
-
-// =====================================================
-// TIMEOUT
-// =====================================================
-
-async function comTimeout(
-    promise,
-    tempo,
-    nome
-) {
-
-    let timer;
-
-    const timeout =
-        new Promise(
-            (_, reject) => {
-
-                timer = setTimeout(
-                    () => {
-
-                        reject(
-                            new Error(
-                                `Timeout em ${nome}`
-                            )
-                        );
-
-                    },
-                    tempo
-                );
-
-            }
-        );
-
-    try {
-
-        return await Promise.race([
-            promise,
-            timeout
-        ]);
-
-    } finally {
-
-        clearTimeout(timer);
-
-    }
-
+function esperar(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// =====================================================
-// STATUS WHATSAPP
-// =====================================================
+function tempoAleatorio(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
-async function verificarWhatsApp() {
-
-    if (!whatsappPronto) {
-        return false;
+function formatarDestino(destino) {
+    if (String(destino).endsWith('@g.us')) {
+        return '📞 CHAMADOS🚨';
     }
 
-    try {
+    return 'cliente';
+}
 
-        const state =
-            await comTimeout(
-                client.getState(),
-                5000,
-                'getState'
+function adicionarEnvioNaFila(funcaoEnvio) {
+    const envio = filaEnviosWhatsApp
+        .catch(() => {})
+        .then(async () => {
+            const atraso = tempoAleatorio(DELAY_MIN_MS, DELAY_MAX_MS);
+
+            console.log(
+                `⏳ Fila: aguardando ${(atraso / 1000).toFixed(1)}s antes do próximo envio...`
             );
 
-        return (
-            state === 'CONNECTED'
-        );
+            await esperar(atraso);
+            return await funcaoEnvio();
+        });
 
-    } catch {
+    filaEnviosWhatsApp = envio.catch(() => {});
 
-        return false;
-
-    }
-
+    return envio;
 }
 
-// =====================================================
-// TELEFONE
-// =====================================================
+async function enviarMensagemWhatsApp(
+    destino,
+    mensagem,
+    arquivo = null,
+    mostrarDigitando = false
+) {
+    return adicionarEnvioNaFila(async () => {
+        if (!sock || !isConnected) {
+            throw new Error('WhatsApp não está conectado.');
+        }
 
-function analisarTelefone(telefone) {
+        if (mostrarDigitando) {
+            try {
+                await sock.presenceSubscribe(destino);
+                await sock.sendPresenceUpdate('composing', destino);
 
-    if (!telefone) {
+                const tempoDigitando = tempoAleatorio(
+                    DIGITANDO_MIN_MS,
+                    DIGITANDO_MAX_MS
+                );
 
-        return {
-            valido: false,
-            motivo: 'NUMERO_INVALIDO',
-            numero: null
-        };
+                console.log(
+                    `⌨️ Digitando por ${(tempoDigitando / 1000).toFixed(1)}s...`
+                );
 
-    }
+                await esperar(tempoDigitando);
+                await sock.sendPresenceUpdate('paused', destino);
+            } catch (erroPresence) {
+                console.log(
+                    '⚠️ Não foi possível atualizar o status de digitação:',
+                    erroPresence.message
+                );
+            }
+        }
 
-    let numero =
-        String(telefone)
-            .replace(/\D/g, '');
+        if (arquivo) {
+            if (!fs.existsSync(arquivo.path)) {
+                throw new Error('Arquivo temporário não encontrado.');
+            }
 
-    if (
-        numero.startsWith('00')
-    ) {
+            const buffer = fs.readFileSync(arquivo.path);
 
-        numero =
-            numero.substring(2);
+            if (arquivo.mimetype.startsWith('image/')) {
+                await sock.sendMessage(destino, {
+                    image: buffer,
+                    mimetype: arquivo.mimetype,
+                    caption: mensagem
+                });
+            } else if (arquivo.mimetype.startsWith('video/')) {
+                await sock.sendMessage(destino, {
+                    video: buffer,
+                    mimetype: arquivo.mimetype,
+                    caption: mensagem
+                });
+            } else {
+                await sock.sendMessage(destino, {
+                    text: mensagem
+                });
+            }
+        } else {
+            await sock.sendMessage(destino, {
+                text: mensagem
+            });
+        }
 
-    }
-
-    if (
-        !numero.startsWith('55')
-    ) {
-
-        numero =
-            `55${numero}`;
-
-    }
-
-    if (
-        numero.length !== 12 &&
-        numero.length !== 13
-    ) {
-
-        return {
-            valido: false,
-            motivo: 'NUMERO_INVALIDO',
-            numero
-        };
-
-    }
-
-    const ddd =
-        Number(
-            numero.substring(2, 4)
+        console.log(
+            `✅ Mensagem enviada para ${formatarDestino(destino)}.`
         );
+    });
+}
 
-    if (
-        Number.isNaN(ddd) ||
-        ddd < 11 ||
-        ddd > 99
-    ) {
+const mensagemBoasVindas = `Olá! Tudo bem? 👋
 
-        return {
-            valido: false,
-            motivo: 'NUMERO_INVALIDO',
-            numero
-        };
+Somos a Lar Forte e estamos prontos para ajudar!
 
-    }
+Para solicitar um orçamento, acesse:
+${FRONTEND_URL}/atendimento
 
-    if (
-        numero.length === 13
-    ) {
+Ou, se preferir falar com nossa equipe agora, digite 1.`;
+
+async function processarMensagemRecebida(message) {
+    try {
+        if (!message?.message || message.key?.fromMe) {
+            return;
+        }
+
+        const remoteJid = message.key?.remoteJid;
 
         if (
-            !numero
-                .substring(4)
-                .startsWith('9')
+            !remoteJid ||
+            remoteJid === 'status@broadcast' ||
+            remoteJid.endsWith('@g.us')
         ) {
-
-            return {
-                valido: false,
-                motivo: 'NUMERO_INVALIDO',
-                numero
-            };
-
+            return;
         }
 
-    }
+        let textoRecebido = '';
 
-    return {
+        if (message.message.conversation) {
+            textoRecebido = message.message.conversation;
+        } else if (message.message.extendedTextMessage?.text) {
+            textoRecebido = message.message.extendedTextMessage.text;
+        } else if (message.message.ephemeralMessage?.message?.conversation) {
+            textoRecebido =
+                message.message.ephemeralMessage.message.conversation;
+        } else if (
+            message.message.ephemeralMessage?.message?.extendedTextMessage?.text
+        ) {
+            textoRecebido =
+                message.message.ephemeralMessage.message.extendedTextMessage.text;
+        }
 
-        valido: true,
+        textoRecebido = String(
+            textoRecebido || ''
+        ).trim();
 
-        motivo: 'VALIDO',
+        if (!textoRecebido) {
+            return;
+        }
 
-        numero,
-
-        idDireto:
-            `${numero}@c.us`
-
-    };
-
-}
-
-// =====================================================
-// CLASSIFICAÇÃO DE ERROS
-// =====================================================
-
-function classificarErroWhatsApp(
-    error
-) {
-
-    const texto =
-        String(
-            error?.message ||
-            error ||
-            ''
-        ).toLowerCase();
-
-    if (
-        texto.includes('no lid for user') ||
-        texto.includes('lid')
-    ) {
-
-        return 'LID_ERROR';
-
-    }
-
-    if (
-        texto.includes('not registered') ||
-        texto.includes('not a whatsapp user')
-    ) {
-
-        return 'NUMERO_NAO_ENCONTRADO';
-
-    }
-
-    if (
-        texto.includes('invalid wid') ||
-        texto.includes('invalid number')
-    ) {
-
-        return 'NUMERO_INVALIDO';
-
-    }
-
-    if (
-        texto.includes('disconnected') ||
-        texto.includes('not connected')
-    ) {
-
-        return 'WHATSAPP_OFFLINE';
-
-    }
-
-    return 'ERRO_ENVIO';
-
-}
-
-// =====================================================
-// CONFIRMAÇÃO CLIENTE
-// =====================================================
-
-async function enviarConfirmacaoCliente(
-    dados
-) {
-
-    const analise =
-        analisarTelefone(
-            dados.telefone
-        );
-
-    if (!analise.valido) {
-
-        console.error(
-            '❌ Telefone inválido:',
-            dados.telefone
-        );
-
-        return {
-            sucesso: false,
-            motivo: 'NUMERO_INVALIDO'
-        };
-
-    }
-
-    if (
-        !await verificarWhatsApp()
-    ) {
-
-        console.log(
-            '⚠️ WhatsApp offline.'
-        );
-
-        return {
-            sucesso: false,
-            motivo: 'WHATSAPP_OFFLINE'
-        };
-
-    }
-
-    const mensagem =
-
-        `Olá, *${dados.nome || 'cliente'}*! 👋\n\n` +
-
-        `Recebemos com sucesso o seu pedido de orçamento ` +
-
-        `para o serviço de *${dados.servicoEspecifico || 'sua solicitação'}*.\n\n` +
-
-        `Nossa equipe já foi notificada e entrará em contato ` +
-
-        `muito em breve para alinhar os próximos detalhes.\n\n` +
-
-        `Agradecemos por escolher a *Lar Forte*! 🏠🛠️`;
-
-    try {
-
-        const contato =
-            await comTimeout(
-                client.getNumberId(
-                    analise.numero
-                ),
-                10000,
-                'getNumberId'
-            );
+        const numeroFormatado = remoteJid.split('@')[0];
+        const agora = Date.now();
+        const ultimoEnvio =
+            cooldownsAutoResposta.get(numeroFormatado);
 
         if (
-            contato?._serialized
+            ultimoEnvio &&
+            agora - ultimoEnvio < TEMPO_TRAVA_MS
         ) {
+            console.log(
+                `⏱️ Resposta automática bloqueada para ${numeroFormatado}.`
+            );
+            return;
+        }
 
-            await comTimeout(
+        cooldownsAutoResposta.set(
+            numeroFormatado,
+            agora
+        );
 
-                client.sendMessage(
-                    contato._serialized,
-                    mensagem
-                ),
+        console.log(
+            `📩 Nova mensagem recebida de ${numeroFormatado}.`
+        );
 
-                15000,
-
-                'envio cliente'
-
+        try {
+            await enviarMensagemWhatsApp(
+                remoteJid,
+                mensagemBoasVindas,
+                null,
+                true
             );
 
             console.log(
-                '✅ Confirmação enviada ao cliente.'
+                '🤖 Resposta automática enviada.'
+            );
+        } catch (erro) {
+            cooldownsAutoResposta.delete(
+                numeroFormatado
             );
 
-            return {
-                sucesso: true,
-                metodo: 'CONTACT_ID'
-            };
-
+            console.error(
+                '❌ Erro ao enviar resposta automática:',
+                erro?.message || erro
+            );
         }
-
-    } catch (error) {
-
-        console.log(
-            '⚠️ Busca de contato falhou:',
-            error?.message || error
-        );
-
-    }
-
-    // ================================================
-    // FALLBACK DIRETO
-    // ================================================
-
-    try {
-
-        await comTimeout(
-
-            client.sendMessage(
-                analise.idDireto,
-                mensagem
-            ),
-
-            15000,
-
-            'envio direto'
-
-        );
-
-        console.log(
-            '✅ Confirmação enviada por número.'
-        );
-
-        return {
-            sucesso: true,
-            metodo: 'NUMERO_DIRETO'
-        };
-
-    } catch (error) {
-
-        const tipo =
-            classificarErroWhatsApp(
-                error
-            );
-
+    } catch (erro) {
         console.error(
-            `❌ Falha no envio [${tipo}]:`,
-            error?.message || error
+            '❌ Erro ao processar mensagem recebida:',
+            erro?.message || erro
         );
-
-        return {
-            sucesso: false,
-            motivo: tipo
-        };
-
     }
-
 }
 
-// =====================================================
-// QR CODE
-// =====================================================
-
-client.on(
-    'qr',
-    async (qr) => {
-
-        whatsappPronto = false;
-
-        qrGeradoEm =
-            new Date().toISOString();
-
-        try {
-
-            // SVG é muito menor que PNG
-            // e não precisa ficar guardado como Buffer.
-
-            qrSvg =
-                await QRCode.toString(
-                    qr,
-                    {
-                        type: 'svg',
-                        margin: 1,
-                        width: 360,
-                        errorCorrectionLevel: 'M'
-                    }
-                );
-
-            console.log('');
-            console.log(
-                '========================================'
-            );
-
-            console.log(
-                '📱 QR CODE GERADO!'
-            );
-
-            console.log(
-                '🌐 Abra: /qrcode'
-            );
-
-            console.log(
-                '========================================'
-            );
-
-            console.log('');
-
-        } catch (error) {
-
-            qrSvg = null;
-
-            console.error(
-                '❌ Erro gerando QR:',
-                error?.message || error
-            );
-
+async function descobrirGrupoChamados() {
+    try {
+        if (!sock || !isConnected) {
+            return false;
         }
 
-    }
-);
+        const grupos =
+            await sock.groupFetchAllParticipating();
 
-// =====================================================
-// AUTHENTICATED
-// =====================================================
+        const grupoChamados =
+            Object.values(grupos).find(grupo => {
+                const nome =
+                    String(grupo.subject || '')
+                        .trim()
+                        .toUpperCase();
 
-client.on(
-    'authenticated',
-    () => {
-
-        console.log(
-            '🔐 WhatsApp autenticado.'
-        );
-
-    }
-);
-
-// =====================================================
-// READY
-// =====================================================
-
-client.on(
-    'ready',
-    () => {
-
-        whatsappPronto = true;
-
-        whatsappInicializando =
-            false;
-
-        qrSvg = null;
-        qrGeradoEm = null;
-
-        console.log('');
-        console.log(
-            '========================================'
-        );
-
-        console.log(
-            '✅ WHATSAPP CONECTADO!'
-        );
-
-        console.log(
-            '========================================'
-        );
-
-        console.log('');
-
-    }
-);
-
-// =====================================================
-// AUTH FAILURE
-// =====================================================
-
-client.on(
-    'auth_failure',
-    (msg) => {
-
-        whatsappPronto = false;
-
-        whatsappInicializando =
-            false;
-
-        console.error(
-            '❌ Falha de autenticação:',
-            msg
-        );
-
-    }
-);
-
-// =====================================================
-// DESCONECTADO
-// =====================================================
-
-client.on(
-    'disconnected',
-    (reason) => {
-
-        whatsappPronto = false;
-
-        whatsappInicializando =
-            false;
-
-        console.error(
-            '⚠️ WhatsApp desconectado:',
-            reason
-        );
-
-    }
-);
-
-// =====================================================
-// BOT AUTOMÁTICO
-// =====================================================
-
-const controleSaudacao =
-    new Map();
-
-const tempoDeInicio =
-    Math.floor(
-        Date.now() / 1000
-    );
-
-client.on(
-    'message',
-    async (msg) => {
-
-        try {
-
-            if (
-                msg.timestamp &&
-                msg.timestamp <
-                tempoDeInicio
-            ) {
-
-                return;
-
-            }
-
-            if (
-                msg.from?.includes(
-                    '@g.us'
-                )
-            ) {
-
-                return;
-
-            }
-
-            if (
-                msg.from ===
-                'status@broadcast'
-            ) {
-
-                return;
-
-            }
-
-            if (msg.fromMe) {
-
-                return;
-
-            }
-
-            const texto =
-                String(
-                    msg.body || ''
-                )
-                    .toLowerCase()
-                    .trim();
-
-            const remetente =
-                msg.from;
-
-            // ========================================
-            // HUMANO
-            // ========================================
-
-            if (
-                texto === '1'
-            ) {
-
-                await delay(
-                    1500
+                return nome.startsWith(
+                    NOME_GRUPO_CHAMADOS
                 );
-
-                await msg.reply(
-                    '✅ *Certo!* Um de nossos profissionais já vai falar com você. Por favor, aguarde um instante.'
-                );
-
-                return;
-
-            }
-
-            const anterior =
-                controleSaudacao.get(
-                    remetente
-                );
-
-            const agora =
-                Date.now();
-
-            const limite =
-                2 *
-                60 *
-                60 *
-                1000;
-
-            if (
-                anterior &&
-                agora - anterior <
-                limite
-            ) {
-
-                return;
-
-            }
-
-            await delay(
-                1500
-            );
-
-            const linkSite =
-                'https://larforte.onrender.com/atendimento';
-
-            const saudacao =
-
-                `Olá! Tudo bem? 👋\n\n` +
-
-                `Somos a *Lar Forte*, especialistas em soluções e manutenção para sua casa.\n\n` +
-
-                `Para agilizar seu orçamento, acesse nosso site:\n` +
-
-                `👉 ${linkSite}\n\n` +
-
-                `Ou, se preferir falar com nossa equipe agora, *digite 1*.`;
-
-            await msg.reply(
-                saudacao
-            );
-
-            controleSaudacao.set(
-                remetente,
-                agora
-            );
-
-        } catch (error) {
-
-            console.error(
-                '❌ Erro no bot:',
-                error?.message || error
-            );
-
-        }
-
-    }
-);
-
-// =====================================================
-// API ATENDIMENTO
-// =====================================================
-
-app.post(
-    '/api/atendimento',
-    limitador,
-    async (req, res) => {
-
-        try {
-
-            const dados =
-                req.body || {};
-
-            // =========================================
-            // SALVAR CSV
-            // =========================================
-
-            const banco =
-                path.join(
-                    __dirname,
-                    'banco_de_dados.csv'
-                );
-
-            const novoArquivo =
-                !fs.existsSync(
-                    banco
-                );
-
-            if (novoArquivo) {
-
-                fs.writeFileSync(
-
-                    banco,
-
-                    'Data,Nome,Telefone,Endereço,Categoria,Serviço,Preço,Observações\n',
-
-                    'utf8'
-
-                );
-
-            }
-
-            const limpar = (valor) =>
-                String(valor || '')
-                    .replace(/"/g, '""');
-
-            const linha =
-
-                `"${new Date().toLocaleString('pt-BR')}",` +
-
-                `"${limpar(dados.nome)}",` +
-
-                `"${limpar(dados.telefone)}",` +
-
-                `"${limpar(dados.endereco)}",` +
-
-                `"${limpar(dados.categoria)}",` +
-
-                `"${limpar(dados.servicoEspecifico)}",` +
-
-                `"${limpar(dados.orcamentoMedio)}",` +
-
-                `"${limpar(dados.observacoes)}"\n`;
-
-            fs.appendFileSync(
-                banco,
-                linha,
-                'utf8'
-            );
-
-            // =========================================
-            // RESPONDE IMEDIATAMENTE
-            // =========================================
-
-            res.status(200).json({
-
-                sucesso: true,
-
-                mensagem:
-                    'Pedido registrado com sucesso!'
-
             });
 
-            // =========================================
-            // WHATSAPP EM SEGUNDO PLANO
-            // =========================================
+        if (!grupoChamados) {
+            idGrupoChamados = null;
 
-            setImmediate(
-                async () => {
+            console.log(
+                '⚠️ 📞 CHAMADOS🚨: grupo não encontrado.'
+            );
 
+            return false;
+        }
+
+        idGrupoChamados =
+            grupoChamados.id;
+
+        console.log(
+            '📞 CHAMADOS🚨: grupo localizado e pronto.'
+        );
+
+        return true;
+    } catch (erro) {
+        idGrupoChamados = null;
+
+        console.error(
+            '❌ Erro ao localizar 📞 CHAMADOS🚨:',
+            erro?.message || erro
+        );
+
+        return false;
+    }
+}
+
+async function iniciarWhatsApp() {
+    try {
+        const {
+            state,
+            saveCreds
+        } = await useMultiFileAuthState(
+            path.join(
+                __dirname,
+                'auth_larforte'
+            )
+        );
+
+        sock = makeWASocket({
+            auth: state,
+            logger: P({
+                level: 'silent'
+            }),
+            browser: [
+                'Lar Forte Atendimento',
+                'Chrome',
+                '1.0.0'
+            ],
+            markOnlineOnConnect: false
+        });
+
+        sock.ev.on(
+            'creds.update',
+            saveCreds
+        );
+
+        sock.ev.on(
+            'connection.update',
+            async update => {
+                const {
+                    connection,
+                    lastDisconnect,
+                    qr
+                } = update;
+
+                if (qr) {
                     try {
+                        currentQRDataURL =
+                            await QRCode.toDataURL(qr);
 
-                        if (
-                            !await verificarWhatsApp()
-                        ) {
+                        console.log('');
+                        console.log(
+                            '📱 QR CODE DISPONÍVEL'
+                        );
+                        console.log(
+                            `🔗 http://localhost:${PORT}/qrcode`
+                        );
+                        console.log('');
+                    } catch (erro) {
+                        console.error(
+                            '❌ Erro ao gerar QR Code:',
+                            erro?.message || erro
+                        );
+                    }
+                }
 
-                            console.log(
-                                '⚠️ Pedido salvo. WhatsApp offline.'
-                            );
+                if (
+                    connection === 'open'
+                ) {
+                    isConnected = true;
+                    currentQRDataURL = null;
 
-                            return;
+                    console.log('');
+                    console.log(
+                        '════════════════════════════════════════════════════'
+                    );
+                    console.log(
+                        '              ✅ WHATSAPP CONECTADO'
+                    );
+                    console.log(
+                        '════════════════════════════════════════════════════'
+                    );
+                    console.log('');
 
-                        }
+                    await descobrirGrupoChamados();
 
-                        const relatorio =
+                    console.log('');
+                    console.log(
+                        '🤖 WHATSAPP:     ✅ CONECTADO'
+                    );
+                    console.log(
+                        `📞 CHAMADOS🚨:   ${
+                            idGrupoChamados
+                                ? '✅ CONECTADO'
+                                : '❌ NÃO ENCONTRADO'
+                        }`
+                    );
+                    console.log('');
+                    console.log(
+                        '════════════════════════════════════════════════════'
+                    );
+                    console.log('');
+                }
 
-                            `🚨 *NOVO CHAMADO VIA SITE* 🚨\n\n` +
+                if (
+                    connection === 'close'
+                ) {
+                    isConnected = false;
+                    idGrupoChamados = null;
 
-                            `👤 *Cliente:* ${dados.nome || 'Não informado'}\n` +
+                    const statusCode =
+                        new Boom(
+                            lastDisconnect?.error
+                        )?.output?.statusCode;
 
-                            `📱 *Contato:* ${dados.telefone || 'Não informado'}\n` +
+                    const deveReconectar =
+                        statusCode !==
+                        DisconnectReason.loggedOut;
 
-                            `📍 *Endereço:* ${dados.endereco || 'Não informado'}\n\n` +
+                    console.log(
+                        '⚠️ WhatsApp desconectado.'
+                    );
 
-                            `🛠️ *Detalhes do Pedido*\n` +
+                    if (deveReconectar) {
+                        console.log(
+                            '🔄 Tentando reconectar...'
+                        );
 
-                            `*Categoria:* ${dados.categoria || 'Não informado'}\n` +
-
-                            `*Serviço:* ${dados.servicoEspecifico || 'Não informado'}\n` +
-
-                            `*Previsão:* ${dados.orcamentoMedio || 'Não informado'}\n\n` +
-
-                            `📌 *Observações:* ${dados.observacoes || 'Nenhuma'}`;
-
-                        // ---------------------------------
-                        // GRUPO
-                        // ---------------------------------
-
-                        await comTimeout(
-
-                            client.sendMessage(
-                                ID_GRUPO_FUNCIONARIOS,
-                                relatorio
-                            ),
-
-                            15000,
-
-                            'envio grupo'
-
+                        setTimeout(
+                            iniciarWhatsApp,
+                            5000
+                        );
+                    } else {
+                        console.log(
+                            '🚪 WhatsApp saiu da sessão.'
                         );
 
                         console.log(
-                            '✅ Relatório enviado ao grupo.'
+                            '📱 Será necessário escanear o QR Code novamente.'
                         );
-
-                        // ---------------------------------
-                        // FOTO
-                        // ---------------------------------
-
-                        if (
-
-                            dados.enviouMidia === 'Sim' &&
-
-                            dados.arquivoPreview
-
-                        ) {
-
-                            const base64 =
-                                String(
-                                    dados.arquivoPreview
-                                )
-                                    .split(
-                                        ';base64,'
-                                    )
-                                    .pop();
-
-                            const media =
-                                new MessageMedia(
-
-                                    dados.mimetype ||
-                                    'image/jpeg',
-
-                                    base64,
-
-                                    dados.filename ||
-                                    'arquivo.jpg'
-
-                                );
-
-                            await comTimeout(
-
-                                client.sendMessage(
-
-                                    ID_GRUPO_FUNCIONARIOS,
-
-                                    media,
-
-                                    {
-
-                                        caption:
-                                            `📸 Foto enviada pelo cliente *${dados.nome || 'Não informado'}*`
-
-                                    }
-
-                                ),
-
-                                30000,
-
-                                'envio mídia'
-
-                            );
-
-                            console.log(
-                                '✅ Mídia enviada ao grupo.'
-                            );
-
-                        }
-
-                        // ---------------------------------
-                        // CLIENTE
-                        // ---------------------------------
-
-                        await enviarConfirmacaoCliente(
-                            dados
-                        );
-
-                    } catch (error) {
-
-                        console.error(
-                            '❌ Erro no processamento WhatsApp:',
-                            error?.message || error
-                        );
-
                     }
-
                 }
-            );
-
-        } catch (error) {
-
-            console.error(
-                '💥 Erro na API:',
-                error?.stack ||
-                error?.message ||
-                error
-            );
-
-            if (
-                !res.headersSent
-            ) {
-
-                res.status(500).json({
-
-                    erro:
-                        'Falha ao processar o pedido.'
-
-                });
-
             }
-
-        }
-
-    }
-);
-
-// =====================================================
-// API QR CODE
-// =====================================================
-
-app.get(
-    '/api/qrcode',
-    (req, res) => {
-
-        res.setHeader(
-            'Cache-Control',
-            'no-store, no-cache, must-revalidate, max-age=0'
         );
 
-        if (!qrSvg) {
+        sock.ev.on(
+            'messages.upsert',
+            async ({
+                messages,
+                type
+            }) => {
+                if (
+                    type !== 'notify'
+                ) {
+                    return;
+                }
 
-            return res
-                .status(503)
-                .send(
-                    'QR Code ainda não foi gerado.'
-                );
+                for (
+                    const message of messages
+                ) {
+                    await processarMensagemRecebida(
+                        message
+                    );
+                }
+            }
+        );
+    } catch (erro) {
+        isConnected = false;
+        idGrupoChamados = null;
 
-        }
-
-        res.setHeader(
-            'Content-Type',
-            'image/svg+xml'
+        console.error(
+            '❌ ERRO AO INICIAR WHATSAPP:',
+            erro?.message || erro
         );
 
-        return res.send(
-            qrSvg
+        setTimeout(
+            iniciarWhatsApp,
+            5000
         );
-
     }
-);
-
-// =====================================================
-// PÁGINA QR
-// =====================================================
-
-app.get(
-    '/qrcode',
-    (req, res) => {
-
-        res.setHeader(
-            'Cache-Control',
-            'no-store, no-cache, must-revalidate, max-age=0'
-        );
-
-        res.send(`
-
-<!DOCTYPE html>
-
-<html lang="pt-BR">
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta name="viewport"
-content="width=device-width,initial-scale=1.0">
-
-<meta http-equiv="refresh"
-content="5">
-
-<title>Lar Forte - WhatsApp</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
 }
-
-body {
-
-    margin: 0;
-
-    min-height: 100vh;
-
-    display: flex;
-
-    justify-content: center;
-
-    align-items: center;
-
-    background: #111;
-
-    color: #fff;
-
-    font-family: Arial, sans-serif;
-
-}
-
-.card {
-
-    width: min(92vw, 560px);
-
-    text-align: center;
-
-    padding: 30px;
-
-}
-
-h1 {
-
-    margin-bottom: 10px;
-
-}
-
-p {
-
-    color: #aaa;
-
-    line-height: 1.5;
-
-}
-
-.qr {
-
-    width: min(85vw, 420px);
-
-    height: auto;
-
-    background: #fff;
-
-    padding: 14px;
-
-    border-radius: 12px;
-
-    margin: 20px auto;
-
-    display: block;
-
-}
-
-.info {
-
-    color: #999;
-
-    font-size: 14px;
-
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="card">
-
-<h1>📱 Conectar WhatsApp</h1>
-
-<p>
-Abra o WhatsApp da empresa e escaneie o QR Code abaixo.
-</p>
-
-<img
-    class="qr"
-    src="/api/qrcode"
-    alt="QR Code WhatsApp"
->
-
-<p class="info">
-A página atualiza automaticamente.
-</p>
-
-</div>
-
-</body>
-
-</html>
-
-        `);
-
-    }
-);
-
-// =====================================================
-// STATUS
-// =====================================================
-
-app.get(
-    '/api/status',
-    async (req, res) => {
-
-        let state =
-            'OFFLINE';
-
-        try {
-
-            state =
-                await comTimeout(
-
-                    client.getState(),
-
-                    5000,
-
-                    'getState'
-
-                );
-
-        } catch {
-
-            state =
-                'OFFLINE';
-
-        }
-
-        const memoria =
-            process.memoryUsage();
-
-        res.json({
-
-            servidor:
-                'online',
-
-            whatsapp:
-                whatsappPronto,
-
-            estadoWhatsapp:
-                state,
-
-            qrDisponivel:
-                Boolean(qrSvg),
-
-            qrGeradoEm:
-                qrGeradoEm,
-
-            memoria: {
-
-                rssMB:
-                    Math.round(
-                        memoria.rss /
-                        1024 /
-                        1024
-                    ),
-
-                heapMB:
-                    Math.round(
-                        memoria.heapUsed /
-                        1024 /
-                        1024
-                    )
-
-            },
-
-            data:
-                new Date().toISOString()
-
-        });
-
-    }
-);
-
-// =====================================================
-// HEALTH
-// =====================================================
 
 app.get(
     '/health',
     (req, res) => {
-
-        res.status(200).json({
-
-            status:
-                'ok',
-
-            whatsapp:
-                whatsappPronto
-
+        res.json({
+            status: 'ok',
+            whatsapp: isConnected
+                ? 'connected'
+                : 'disconnected',
+            chamados:
+                Boolean(idGrupoChamados),
+            timestamp:
+                new Date().toISOString()
         });
-
     }
 );
 
-// =====================================================
-// FRONTEND
-// =====================================================
+app.get(
+    '/qrcode',
+    (req, res) => {
+        if (isConnected) {
+            return res
+                .status(200)
+                .send(`
+                    <!DOCTYPE html>
+                    <html lang="pt-BR">
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>Lar Forte - WhatsApp</title>
+                    </head>
+                    <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;background:#f8fafc;">
+                        <div style="background:white;padding:40px;border-radius:20px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.1);">
+                            <h2 style="color:#16a34a;">✅ WhatsApp conectado!</h2>
+                            <p>O bot da Lar Forte está pronto para uso.</p>
+                        </div>
+                    </body>
+                    </html>
+                `);
+        }
 
-const distPath =
-    path.join(
-        __dirname,
-        'dist'
-    );
+        if (!currentQRDataURL) {
+            return res
+                .status(200)
+                .send(`
+                    <!DOCTYPE html>
+                    <html lang="pt-BR">
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta http-equiv="refresh" content="3">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>Lar Forte - QR Code</title>
+                    </head>
+                    <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;background:#f8fafc;">
+                        <div style="background:white;padding:40px;border-radius:20px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.1);">
+                            <h2>⏳ Aguardando QR Code...</h2>
+                            <p>Esta página será atualizada automaticamente.</p>
+                        </div>
+                    </body>
+                    </html>
+                `);
+        }
 
-if (
-    fs.existsSync(
-        distPath
-    )
-) {
+        return res
+            .status(200)
+            .send(`
+                <!DOCTYPE html>
+                <html lang="pt-BR">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta http-equiv="refresh" content="15">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Lar Forte - QR Code WhatsApp</title>
+                </head>
+                <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;background:#f8fafc;">
+                    <div style="background:white;padding:40px;border-radius:20px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.1);">
+                        <h2>📱 Leia o QR Code com o WhatsApp</h2>
+                        <img src="${currentQRDataURL}" alt="QR Code WhatsApp" style="width:300px;height:300px;margin-top:20px;">
+                        <p style="color:#64748b;margin-top:20px;">A página será atualizada automaticamente.</p>
+                    </div>
+                </body>
+                </html>
+            `);
+    }
+);
 
-    app.use(
-        express.static(
-            distPath
-        )
-    );
+app.post(
+    '/api/atendimento',
+    upload.single('arquivo'),
+    async (req, res) => {
+        const arquivoRecebido =
+            req.file || null;
 
-    app.get(
-        /^(?!\/api\/|\/health|\/qrcode).*/,
-        (req, res) => {
+        try {
+            if (!sock || !isConnected) {
+                return res
+                    .status(503)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'WhatsApp não está conectado no momento.'
+                    });
+            }
 
-            res.sendFile(
-                path.join(
-                    distPath,
-                    'index.html'
-                )
+            const {
+                nome,
+                telefone,
+                numero,
+                numeroEndereco,
+                endereco,
+                bairro,
+                cidade,
+                cep,
+                categoria,
+                servico,
+                estimativa,
+                descricao,
+                observacoes
+            } = req.body;
+
+            const telefoneRecebido =
+                numero || telefone;
+
+            if (!telefoneRecebido) {
+                return res
+                    .status(400)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'Número de WhatsApp não informado.'
+                    });
+            }
+
+            const numeroLimpo =
+                String(telefoneRecebido)
+                    .replace(/\D/g, '');
+
+            if (
+                numeroLimpo.length < 10 ||
+                numeroLimpo.length > 15
+            ) {
+                return res
+                    .status(400)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'Número de WhatsApp inválido.'
+                    });
+            }
+
+            const numeroCom55 =
+                numeroLimpo.startsWith('55')
+                    ? numeroLimpo
+                    : `55${numeroLimpo}`;
+
+            const jid =
+                `${numeroCom55}@s.whatsapp.net`;
+
+            console.log('');
+            console.log(
+                '────────────────────────────────────────────────────'
+            );
+            console.log(
+                '📋 NOVO PEDIDO RECEBIDO'
+            );
+            console.log(
+                `👤 Cliente: ${
+                    nome || 'Não informado'
+                }`
+            );
+            console.log(
+                `📱 WhatsApp: ${numeroCom55}`
+            );
+            console.log(
+                `🔧 Serviço: ${
+                    servico || 'Não informado'
+                }`
+            );
+            console.log(
+                '────────────────────────────────────────────────────'
             );
 
+            let contatos;
+
+            try {
+                contatos =
+                    await sock.onWhatsApp(
+                        numeroCom55
+                    );
+            } catch (erro) {
+                console.error(
+                    '❌ Erro ao verificar WhatsApp:',
+                    erro?.message || erro
+                );
+
+                return res
+                    .status(500)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'Não foi possível verificar o número do WhatsApp.'
+                    });
+            }
+
+            if (
+                !contatos?.length ||
+                !contatos[0]?.exists
+            ) {
+                return res
+                    .status(400)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'Este número não possui WhatsApp.'
+                    });
+            }
+
+            const destinoCliente =
+                contatos[0].jid || jid;
+
+            const enderecoCompleto = [
+                endereco || '',
+                numeroEndereco
+                    ? `Nº ${numeroEndereco}`
+                    : '',
+                bairro
+                    ? `Bairro: ${bairro}`
+                    : '',
+                cidade || '',
+                cep
+                    ? `CEP: ${cep}`
+                    : ''
+            ]
+                .filter(Boolean)
+                .join(', ');
+
+            const mensagem = `🏠 *NOVO PEDIDO - LAR FORTE*
+
+👤 *Cliente:* ${nome || 'Não informado'}
+
+📱 *WhatsApp:* ${telefoneRecebido || 'Não informado'}
+
+📍 *Endereço:*
+${enderecoCompleto || 'Não informado'}
+
+🔧 *Categoria:* ${categoria || 'Não informado'}
+
+🛠️ *Serviço:* ${servico || 'Não informado'}
+
+💰 *Estimativa:* ${estimativa || 'Não informado'}
+
+📝 *Descrição:*
+${descricao || 'Não informado'}
+
+💬 *Observações:*
+${observacoes || 'Nenhuma'}
+
+📎 *Mídia:* ${
+                arquivoRecebido
+                    ? 'Sim'
+                    : 'Não'
+            }`;
+
+            let clienteEnviado = false;
+            let grupoEnviado = false;
+
+            try {
+                console.log(
+                    '📤 Enviando pedido para o cliente...'
+                );
+
+                await enviarMensagemWhatsApp(
+                    destinoCliente,
+                    mensagem,
+                    arquivoRecebido,
+                    false
+                );
+
+                clienteEnviado = true;
+
+                console.log(
+                    '✅ Pedido enviado para o cliente.'
+                );
+            } catch (erroCliente) {
+                console.error(
+                    '❌ ERRO NO ENVIO AO CLIENTE:',
+                    erroCliente?.message ||
+                    erroCliente
+                );
+            }
+
+            try {
+                if (!idGrupoChamados) {
+                    await descobrirGrupoChamados();
+                }
+
+                if (!idGrupoChamados) {
+                    console.log(
+                        '⚠️ 📞 CHAMADOS🚨: envio não realizado.'
+                    );
+                } else {
+                    console.log(
+                        '📤 Enviando pedido para 📞 CHAMADOS🚨...'
+                    );
+
+                    await enviarMensagemWhatsApp(
+                        idGrupoChamados,
+                        mensagem,
+                        arquivoRecebido,
+                        false
+                    );
+
+                    grupoEnviado = true;
+
+                    console.log(
+                        '✅ Pedido enviado para 📞 CHAMADOS🚨.'
+                    );
+                }
+            } catch (erroGrupo) {
+                console.error(
+                    '❌ ERRO NO ENVIO AO 📞 CHAMADOS🚨:',
+                    erroGrupo?.message ||
+                    erroGrupo
+                );
+            }
+
+            if (
+                !clienteEnviado &&
+                !grupoEnviado
+            ) {
+                return res
+                    .status(500)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'Não foi possível enviar o pedido.'
+                    });
+            }
+
+            return res.json({
+                sucesso: true,
+                clienteEnviado,
+                grupoEnviado,
+                mensagem:
+                    'Pedido enviado com sucesso!'
+            });
+        } catch (erro) {
+            console.error(
+                '❌ ERRO FINAL NO ATENDIMENTO:',
+                erro?.message || erro
+            );
+
+            return res
+                .status(500)
+                .json({
+                    sucesso: false,
+                    mensagem:
+                        'Erro interno ao processar o atendimento.'
+                });
+        } finally {
+            if (
+                arquivoRecebido?.path &&
+                fs.existsSync(
+                    arquivoRecebido.path
+                )
+            ) {
+                try {
+                    fs.unlinkSync(
+                        arquivoRecebido.path
+                    );
+
+                    console.log(
+                        '🗑️ Arquivo temporário removido.'
+                    );
+                } catch (erroArquivo) {
+                    console.error(
+                        '⚠️ Erro ao remover arquivo temporário:',
+                        erroArquivo?.message ||
+                        erroArquivo
+                    );
+                }
+            }
         }
-    );
-
-}
-
-// =====================================================
-// INICIALIZAÇÃO WHATSAPP
-// =====================================================
-
-async function iniciarWhatsApp() {
-
-    if (
-        whatsappInicializando ||
-        whatsappPronto
-    ) {
-
-        return;
-
     }
+);
 
-    whatsappInicializando =
-        true;
+app.use(
+    (erro, req, res, next) => {
+        if (
+            erro instanceof multer.MulterError
+        ) {
+            if (
+                erro.code ===
+                'LIMIT_FILE_SIZE'
+            ) {
+                return res
+                    .status(400)
+                    .json({
+                        sucesso: false,
+                        mensagem:
+                            'O arquivo não pode ultrapassar 100 MB.'
+                    });
+            }
 
-    console.log('');
-    console.log(
-        '⏳ Inicializando WhatsApp...'
-    );
-    console.log('');
+            return res
+                .status(400)
+                .json({
+                    sucesso: false,
+                    mensagem:
+                        erro.message
+                });
+        }
 
-    try {
+        if (erro) {
+            console.error(
+                '❌ Erro do servidor:',
+                erro?.message || erro
+            );
 
-        await client.initialize();
+            return res
+                .status(500)
+                .json({
+                    sucesso: false,
+                    mensagem:
+                        erro.message ||
+                        'Erro interno do servidor.'
+                });
+        }
 
-    } catch (error) {
-
-        whatsappInicializando =
-            false;
-
-        console.error('');
-
-        console.error(
-            '❌ Erro ao inicializar WhatsApp:'
-        );
-
-        console.error(
-            error?.stack ||
-            error?.message ||
-            error
-        );
-
-        console.error('');
-
+        next();
     }
-
-}
-
-// =====================================================
-// SERVIDOR
-// =====================================================
+);
 
 app.listen(
     PORT,
-    '0.0.0.0',
     () => {
-
         console.log('');
         console.log(
-            `🚀 Servidor Lar Forte na porta ${PORT}`
+            '════════════════════════════════════════════════════'
+        );
+        console.log(
+            '               🚀 LAR FORTE'
+        );
+        console.log(
+            '════════════════════════════════════════════════════'
+        );
+        console.log('');
+        console.log(
+            `🌐 API:          http://localhost:${PORT}`
+        );
+        console.log(
+            `📱 QR CODE:      http://localhost:${PORT}/qrcode`
+        );
+        console.log(
+            `❤️  HEALTH:       http://localhost:${PORT}/health`
+        );
+        console.log(
+            `💻 ATENDIMENTO:  ${FRONTEND_URL}/atendimento`
+        );
+        console.log('');
+        console.log(
+            '────────────────────────────────────────────────────'
+        );
+        console.log(
+            '📞 CHAMADOS🚨:   aguardando WhatsApp...'
+        );
+        console.log(
+            '🤖 WHATSAPP:     iniciando...'
+        );
+        console.log(
+            '────────────────────────────────────────────────────'
         );
         console.log('');
 
-        // Pequeno atraso para o Render detectar
-        // a porta antes de iniciar o Chromium.
-
-        setTimeout(
-            iniciarWhatsApp,
-            1500
-        );
-
+        iniciarWhatsApp();
     }
 );
