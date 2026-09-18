@@ -1,11 +1,12 @@
 export const API_CONFIG = {
     BASE_URL:
         import.meta.env.VITE_API_URL ||
-        'http://localhost:3000',
+        'https://lar-forte-api.onrender.com',
 
     TIMEOUT: 60000,
 
     ENDPOINTS: {
+        QR_CODE: '/qrcode',
         ATENDIMENTO: '/api/atendimento',
         HEALTH: '/health'
     }
@@ -14,10 +15,13 @@ export const API_CONFIG = {
 export const LINKS = {
     SITE:
         import.meta.env.VITE_SITE_URL ||
-        '',
+        'https://larforte-web.vercel.app',
 
     ATENDIMENTO:
-        `${import.meta.env.VITE_SITE_URL || ''}/atendimento`
+        `${import.meta.env.VITE_SITE_URL || 'https://larforte-web.vercel.app'}/atendimento`,
+
+    QR_CODE:
+        `${import.meta.env.VITE_API_URL || 'https://lar-forte-api.onrender.com'}/qrcode`
 };
 
 export const ROUTES = {
@@ -39,14 +43,17 @@ export const VALIDATION = {
         MAX_LENGTH: 15,
         REGEX: /^\(\d{2}\) \d{4,5}-\d{4}$/
     },
+
     CEP: {
         LENGTH: 8,
         REGEX: /^\d{8}$/
     },
+
     NOME: {
         MIN_LENGTH: 3,
         MAX_LENGTH: 100
     },
+
     OBSERVACOES: {
         MAX_LENGTH: 500
     }
@@ -55,10 +62,12 @@ export const VALIDATION = {
 export const FILE_CONFIG = {
     MAX_SIZE_MB: 100,
     MAX_SIZE_BYTES: 100 * 1024 * 1024,
+
     ACCEPTED_TYPES: {
         IMAGE: 'image/*',
         VIDEO: 'video/*'
     },
+
     ALLOWED_EXTENSIONS: [
         'jpg',
         'jpeg',
@@ -78,10 +87,12 @@ export const MESSAGES = {
         UPLOAD: '❌ Erro ao fazer upload do arquivo.',
         VALIDATION: '❌ Preencha todos os campos obrigatórios.'
     },
+
     SUCCESS: {
         ORDER_SENT: '✅ Pedido recebido com sucesso!',
         PROFILE_SAVED: '💾 Perfil salvo.'
     },
+
     WARNING: {
         SESSION_EXPIRED: '⚠️ Sua sessão expirou.',
         LARGE_FILE: '⚠️ O arquivo não pode ultrapassar 100 MB.'
@@ -99,6 +110,7 @@ export const ENVIRONMENT = {
     IS_DEV: import.meta.env.DEV,
     IS_PROD: import.meta.env.PROD,
     MODE: import.meta.env.MODE,
+
     TIMEZONE:
         import.meta.env.VITE_TIMEZONE ||
         'America/Sao_Paulo'
