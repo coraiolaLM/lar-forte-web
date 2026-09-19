@@ -1,7 +1,17 @@
+const API_BASE_URL =
+    import.meta.env.VITE_API_URL ||
+    (import.meta.env.DEV
+        ? 'http://localhost:3000'
+        : 'https://lar-forte-api.onrender.com');
+
+const SITE_URL =
+    import.meta.env.VITE_SITE_URL ||
+    (import.meta.env.DEV
+        ? 'http://localhost:5173'
+        : 'https://larforte-web.vercel.app');
+
 export const API_CONFIG = {
-    BASE_URL:
-        import.meta.env.VITE_API_URL ||
-        'https://lar-forte-api.onrender.com',
+    BASE_URL: API_BASE_URL,
 
     TIMEOUT: 60000,
 
@@ -13,15 +23,13 @@ export const API_CONFIG = {
 };
 
 export const LINKS = {
-    SITE:
-        import.meta.env.VITE_SITE_URL ||
-        'https://larforte-web.vercel.app',
+    SITE: SITE_URL,
 
     ATENDIMENTO:
-        `${import.meta.env.VITE_SITE_URL || 'https://larforte-web.vercel.app'}/atendimento`,
+        `${SITE_URL}/atendimento`,
 
     QR_CODE:
-        `${import.meta.env.VITE_API_URL || 'https://lar-forte-api.onrender.com'}/qrcode`
+        `${API_BASE_URL}/qrcode`
 };
 
 export const ROUTES = {

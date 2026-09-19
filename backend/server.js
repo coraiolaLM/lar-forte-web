@@ -49,8 +49,16 @@ const cooldownsAutoResposta = new Map();
 
 const uploadsDir = path.join(__dirname, 'uploads');
 
+const AUTH_DIR = process.env.AUTH_DIR
+    ? path.resolve(process.env.AUTH_DIR)
+    : path.join(__dirname, 'auth_larforte');
+
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+if (!fs.existsSync(AUTH_DIR)) {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
 }
 
 app.use(cors());
@@ -518,10 +526,7 @@ async function iniciarWhatsApp() {
             saveCreds
         } =
             await useMultiFileAuthState(
-                path.join(
-                    __dirname,
-                    'auth_larforte'
-                )
+                AUTH_DIR
             );
 
         sock = makeWASocket({
@@ -1257,6 +1262,7 @@ app.use(
 
 app.listen(
     PORT,
+    '0.0.0.0',
     () => {
         console.log('');
         console.log(
@@ -1284,6 +1290,10 @@ app.listen(
 
         console.log(
             `💻 ATENDIMENTO:  ${FRONTEND_URL}/atendimento`
+        );
+
+        console.log(
+            `🔐 AUTH:         ${AUTH_DIR}`
         );
 
         console.log('');
