@@ -1,0 +1,80 @@
+services:
+  api:
+    build:
+      context: ./backend
+    image: lar-forte-api
+    container_name: lar-forte-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      TZ: ${VITE_TIMEZONE:-America/Sao_Paulo}
+      AUTH_DIR: /data/auth
+      VITE_API_URL: ${VITE_API_URL}
+      VITE_SITE_URL: ${VITE_SITE_URL}
+      WHATSAPP_GROUP_ID: ${WHATSAPP_GROUP_ID}
+    volumes:
+      - whatsapp_auth:/data/auth
+      - uploads:/app/uploads
+    networks:
+      - proxy
+    mem_limit: 700m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.services.lar-forte-api.loadbalancer.server.port=3000"
+
+      - "traefik.http.routers.lar-forte-api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.lar-forte-api.entrypoints=websecure"
+      - "traefik.http.routers.lar-forte-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lar-forte-api.priority=100"
+      - "traefik.http.routers.lar-forte-api.service=lar-forte-api"
+
+      - "traefik.http.routers.lar-forte-qrcode.rule=Host(`${DOMAIN}`) && PathPrefix(`/qrcode`)"
+      - "traefik.http.routers.lar-forte-qrcode.entrypoints=websecure"
+      - "traefik.http.routers.lar-forte-qrcode.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lar-forte-qrcode.priority=200"
+      - "traefik.http.routers.lar-forte-qrcode.service=lar-forte-api"
+      - "traefik.http.routers.lar-forte-qrcode.middlewares=lar-forte-qrcode-auth"
+      - "traefik.http.middlewares.lar-forte-qrcode-auth.basicauth.users=${QRCODE_AUTH}"
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_SITE_URL: ${VITE_SITE_URL}
+        VITE_TIMEZONE: ${VITE_TIMEZONE:-America/Sao_Paulo}
+    image: lar-forte-web
+    container_name: lar-forte-web
+    restart: unless-stopped
+    networks:
+      - proxy
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.services.lar-forte-web.loadbalancer.server.port=80"
+      - "traefik.http.routers.lar-forte-web.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.lar-forte-web.entrypoints=websecure"
+      - "traefik.http.routers.lar-forte-web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lar-forte-web.priority=1"
+      - "traefik.http.routers.lar-forte-web.service=lar-forte-web"
+
+volumes:
+  whatsapp_auth:
+  uploads:
+
+networks:
+  proxy:
+    external: true

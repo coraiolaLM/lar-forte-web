@@ -1,0 +1,8 @@
+node_modules
+.env
+.env.*
+!.env.example
+auth_larforte
+uploads
+*.log
+.DS_Store
