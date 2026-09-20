@@ -29,14 +29,12 @@ services:
       - traefik.http.routers.lar-forte-api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))
       - traefik.http.routers.lar-forte-api.entrypoints=websecure
       - traefik.http.routers.lar-forte-api.tls=true
-      - traefik.http.routers.lar-forte-api.tls.certresolver=letsencrypt
       - traefik.http.routers.lar-forte-api.priority=100
       - traefik.http.routers.lar-forte-api.service=lar-forte-api
 
       - traefik.http.routers.lar-forte-qrcode.rule=Host(`${DOMAIN}`) && PathPrefix(`/qrcode`)
       - traefik.http.routers.lar-forte-qrcode.entrypoints=websecure
       - traefik.http.routers.lar-forte-qrcode.tls=true
-      - traefik.http.routers.lar-forte-qrcode.tls.certresolver=letsencrypt
       - traefik.http.routers.lar-forte-qrcode.priority=200
       - traefik.http.routers.lar-forte-qrcode.service=lar-forte-api
       - traefik.http.routers.lar-forte-qrcode.middlewares=lar-forte-qrcode-auth
