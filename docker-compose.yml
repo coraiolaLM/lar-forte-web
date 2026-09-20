@@ -1,3 +1,5 @@
+name: lar-forte
+
 services:
   api:
     build:
@@ -17,31 +19,28 @@ services:
       - whatsapp_auth:/data/auth
       - uploads:/app/uploads
     networks:
-      - proxy
-    mem_limit: 700m
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - web
+    mem_limit: 512m
     labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.services.lar-forte-api.loadbalancer.server.port=3000"
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.services.lar-forte-api.loadbalancer.server.port=3000
 
-      - "traefik.http.routers.lar-forte-api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
-      - "traefik.http.routers.lar-forte-api.entrypoints=websecure"
-      - "traefik.http.routers.lar-forte-api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.lar-forte-api.priority=100"
-      - "traefik.http.routers.lar-forte-api.service=lar-forte-api"
+      - traefik.http.routers.lar-forte-api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))
+      - traefik.http.routers.lar-forte-api.entrypoints=websecure
+      - traefik.http.routers.lar-forte-api.tls=true
+      - traefik.http.routers.lar-forte-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.lar-forte-api.priority=100
+      - traefik.http.routers.lar-forte-api.service=lar-forte-api
 
-      - "traefik.http.routers.lar-forte-qrcode.rule=Host(`${DOMAIN}`) && PathPrefix(`/qrcode`)"
-      - "traefik.http.routers.lar-forte-qrcode.entrypoints=websecure"
-      - "traefik.http.routers.lar-forte-qrcode.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.lar-forte-qrcode.priority=200"
-      - "traefik.http.routers.lar-forte-qrcode.service=lar-forte-api"
-      - "traefik.http.routers.lar-forte-qrcode.middlewares=lar-forte-qrcode-auth"
-      - "traefik.http.middlewares.lar-forte-qrcode-auth.basicauth.users=${QRCODE_AUTH}"
+      - traefik.http.routers.lar-forte-qrcode.rule=Host(`${DOMAIN}`) && PathPrefix(`/qrcode`)
+      - traefik.http.routers.lar-forte-qrcode.entrypoints=websecure
+      - traefik.http.routers.lar-forte-qrcode.tls=true
+      - traefik.http.routers.lar-forte-qrcode.tls.certresolver=letsencrypt
+      - traefik.http.routers.lar-forte-qrcode.priority=200
+      - traefik.http.routers.lar-forte-qrcode.service=lar-forte-api
+      - traefik.http.routers.lar-forte-qrcode.middlewares=lar-forte-qrcode-auth
+      - traefik.http.middlewares.lar-forte-qrcode-auth.basicauth.users=${QRCODE_AUTH}
 
   web:
     build:
@@ -54,27 +53,23 @@ services:
     container_name: lar-forte-web
     restart: unless-stopped
     networks:
-      - proxy
+      - web
     mem_limit: 128m
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.services.lar-forte-web.loadbalancer.server.port=80"
-      - "traefik.http.routers.lar-forte-web.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.lar-forte-web.entrypoints=websecure"
-      - "traefik.http.routers.lar-forte-web.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.lar-forte-web.priority=1"
-      - "traefik.http.routers.lar-forte-web.service=lar-forte-web"
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.services.lar-forte-web.loadbalancer.server.port=80
+      - traefik.http.routers.lar-forte-web.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.lar-forte-web.entrypoints=websecure
+      - traefik.http.routers.lar-forte-web.tls=true
+      - traefik.http.routers.lar-forte-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.lar-forte-web.priority=1
+      - traefik.http.routers.lar-forte-web.service=lar-forte-web
 
 volumes:
   whatsapp_auth:
   uploads:
 
 networks:
-  proxy:
+  web:
     external: true
